@@ -1,0 +1,8 @@
+{
+  "d_bounds": [0.81,0.91,0.2],
+  "phi1_bounds": [0.01, 1.5, 0.02],
+  "phi2_bounds": [0.01, 1.5, 0.02],
+  "output_mesh": "solution_space.msh",
+  "output_npz": "solution_space.npz",
+  "visualization_interval": 1000
+}

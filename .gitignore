@@ -1,0 +1,23 @@
+# Simulation output: large, regenerable, kept out of git (see data/README.md)
+data/*
+!data/README.md
+*.msh
+*.npz
+*.vtu
+*.vtk
+*.pvsm
+solvers/**/*.png
+
+# Python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Editors / OS
+.vscode/
+.idea/
+*Zone.Identifier
+.DS_Store
+
+# Office lock files
+~$*.pptx
