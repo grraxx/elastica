@@ -9,8 +9,6 @@
     "phi1": 0.01,
     "phi2": 0.01
   },
-  "scale_parameters_for_mesh": true,
-  "output_mesh": "solution_space.msh",
   "output_npz": "solution_space.npz",
 
   "beam_elements": 100,
@@ -30,7 +28,7 @@
 
   "cold_start": {
     "d": 0.9,
-    "phi1": 0.4, 
+    "phi1": 0.4,
     "phi2": -0.4
   }
 }

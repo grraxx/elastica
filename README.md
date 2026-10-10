@@ -62,7 +62,7 @@ Between smooth neighbours MAC ≈ 0.9999; across the snap it drops below 0.1 (0.
 |---|---|---|---|---|
 | **v1** | Depth-first walk over a structured tet mesh (gmsh, 6 tets per cell); warm start from solved neighbours | Accept/reject vs. warm-start neighbour | Try the next solved neighbour | 2026-09-21 |
 | **v2** | As v1, with one reusable `ElasticaSolver` and live NPZ/PNG checkpoints | As v1 | As v1 | 2026-09-21 |
-| **v4** | Nodes sorted by distance from a cold-start node; warm start from the previous node; mirror symmetry; VTU for ParaView; checkpoint and resume | Gate (threshold 0.85) | Cold restart from a first-buckling-mode guess | 2026-09-25 |
+| **v4** | Nodes sorted by grid distance from a cold-start node; warm start from the nearest solved grid neighbour; mirror symmetry; VTU for ParaView; checkpoint and resume (Ctrl-C saves a checkpoint) | Gate (threshold 0.85) | Cold start: continue the clamp angles from the exact first clamped mode (both hump directions, keep the lower energy) | 2026-09-25 |
 | **v3** | Sweep d layer by layer; greedy nearest-neighbour walk in (φ₁, φ₂); a single cold start; mirror symmetry | Step-size control (threshold 0.90) | Halve the step, up to 5 times (32 sub-steps), then accept the jump as physical | 2026-09-26 |
 
 By file dates **v3 is newer than v4**, despite the folder names. v3 also adds θ-gradient-driven
@@ -91,7 +91,7 @@ python npz_to_vtk.py solution_space_results.npz out.vtk
 # v4: tet-mesh traversal with MAC gate, NPZ + VTU output
 cd solvers/v4
 python main.py                                       # resumes from solution_space_live.npz if present
-python repair_vtu.py solution_space_live.vtu         # make a half-finished VTU loadable in ParaView
+python repair_vtu.py solution_space_live.npz         # compact VTU of the solved points only
 
 # v1 / v2
 cd solvers/v1 && python main.py
@@ -126,8 +126,6 @@ record only.
 
 - **v3 mirrored moment sign.** `build_result_arrays` stores −θ′(L) for mirrored points; from
   θ̃(s) = −θ(L − s) the correct value is +θ′(L), as v4 stores.
-- **v4 visit order.** Sorting by distance from the start places consecutive nodes on shells, so
-  the "previous node" warm start can be far away.
 - **Near d → 1.** The v4 0.02 run has 4,597 of 21,829 points with d ≥ 0.95 at f_x < −50 (min
   −1,100), likely tension boundary layers at the clamps; that run used 50 elements, so check mesh
   convergence.
