@@ -62,7 +62,7 @@ Between smooth neighbours MAC ≈ 0.9999; across the snap it drops below 0.1 (0.
 |---|---|---|---|---|
 | **v1** | Depth-first walk over a structured tet mesh (gmsh, 6 tets per cell); warm start from solved neighbours | Accept/reject vs. warm-start neighbour | Try the next solved neighbour | 2026-09-21 |
 | **v2** | As v1, with one reusable `ElasticaSolver` and live NPZ/PNG checkpoints | As v1 | As v1 | 2026-09-21 |
-| **v4** | Nodes sorted by grid distance from a cold-start node; warm start from the nearest solved grid neighbour; mirror symmetry; VTU for ParaView; checkpoint and resume (Ctrl-C saves a checkpoint) | Gate (threshold 0.85) | Cold start: continue the clamp angles from the exact first clamped mode (both hump directions, keep the lower energy) | 2026-09-25 |
+| **v4** | One cold start at φ₁ = φ₂ = 0, smallest d; nodes sorted by grid distance from it; warm start from each solved grid neighbour in turn, nearest first; mirror symmetry; VTU for ParaView; checkpoint and resume (Ctrl-C saves a checkpoint) | Gate (threshold 0.85) | Try the next neighbour; only when all fail, cold start: continue the clamp angles from the exact first clamped mode (both hump directions, keep the lower energy) | 2026-09-25 |
 | **v3** | Sweep d layer by layer; greedy nearest-neighbour walk in (φ₁, φ₂); a single cold start; mirror symmetry | Step-size control (threshold 0.90) | Halve the step, up to 5 times (32 sub-steps), then accept the jump as physical | 2026-09-26 |
 
 By file dates **v3 is newer than v4**, despite the folder names. v3 also adds θ-gradient-driven
@@ -99,7 +99,7 @@ cd solvers/v1 && python main.py
 
 Key `config.json` fields: parameter bounds and steps (`d_bounds`, `phi1_bounds`,
 `phi2_bounds`, `grid_steps` in v4), `beam_elements`, SNES tolerances, `mac_threshold`,
-`cold_start`, and (v3) `max_mac_refinements` and `gradient_refinement`.
+`warm_start_max_it` (v4), and (v3) `max_mac_refinements` and `gradient_refinement`.
 
 ## 3D snap surface
 

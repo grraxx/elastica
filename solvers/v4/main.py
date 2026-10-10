@@ -1,8 +1,10 @@
 """
 main.py
 Main script to run the elastica solver over the solution space.
-Nodes are visited in order of grid distance from the cold-start node, and
-each one is warm-started from its nearest already-solved grid neighbour.
+The only planned cold start is at the angular origin (phi1 = phi2 = 0) at the
+smallest d. Nodes are then visited in order of grid distance from it, and each
+one is warm-started from its solved grid neighbours, nearest first; a node is
+cold-started again only if every neighbour's warm start fails.
 """
 
 import os
@@ -16,7 +18,6 @@ import itertools
 import json
 import signal
 import time
-from typing import Optional
 
 import basix.ufl
 import numpy as np
@@ -94,36 +95,8 @@ def choose_start_node(coords: np.ndarray) -> int:
     return int(order[0])
 
 
-def resolve_cold_start_node(coords: np.ndarray, config: dict) -> Optional[int]:
-    """Return the user-selected cold-start node, if provided in the config."""
-    cold_start = config.get("cold_start")
-    if cold_start is None:
-        return None
-
-    if isinstance(cold_start, dict):
-        try:
-            target = np.array([
-                float(cold_start["d"]),
-                float(cold_start["phi1"]),
-                float(cold_start["phi2"]),
-            ], dtype=float)
-        except KeyError as exc:
-            raise ValueError(
-                "cold_start must include d, phi1, and phi2 keys"
-            ) from exc
-    elif isinstance(cold_start, (list, tuple)) and len(cold_start) == 3:
-        target = np.asarray(cold_start, dtype=float)
-    else:
-        raise ValueError(
-            "cold_start must be a dict with d, phi1, phi2 or a 3-element sequence"
-        )
-
-    distances = np.linalg.norm(coords - target[None, :], axis=1)
-    return int(np.argmin(distances))
-
-
-def nearest_solved_neighbor(node_idx, shape, solved):
-    """Return the closest solved grid neighbour of node_idx, or None."""
+def solved_neighbors(node_idx, shape, solved):
+    """Yield the solved grid neighbours of node_idx, nearest first."""
     plane = shape[1] * shape[2]
     i, rest = divmod(node_idx, plane)
     j, k = divmod(rest, shape[2])
@@ -132,8 +105,7 @@ def nearest_solved_neighbor(node_idx, shape, solved):
         if 0 <= ni < shape[0] and 0 <= nj < shape[1] and 0 <= nk < shape[2]:
             neighbor = ni * plane + nj * shape[2] + nk
             if solved[neighbor]:
-                return neighbor
-    return None
+                yield neighbor
 
 
 def save_results_npz(output_npz, coords, tets, fx_arr, fy_arr, moment_arr,
@@ -195,9 +167,7 @@ def main():
 
     # Step 3: Visit solve nodes in order of grid distance from the start node,
     # so every node after the first has a solved neighbour to warm-start from.
-    cold_start_idx = resolve_cold_start_node(coords, config)
-    start_idx = (cold_start_idx if cold_start_idx is not None
-                 else choose_start_node(coords))
+    start_idx = choose_start_node(coords)
     if not solve_mask[start_idx]:
         start_idx = int(mirror_indices[start_idx])
     grid_index = np.column_stack(np.unravel_index(np.arange(num_nodes), shape))
@@ -220,6 +190,10 @@ def main():
     theta_arr = np.full((num_nodes, num_beam_dofs), np.nan)
 
     mac_threshold = float(config.get("mac_threshold", 0.9))
+    # A warm start from an adjacent node converges in a few Newton iterations
+    # (at most 29 on a 0.1 rad grid); one that needs more is a failed attempt,
+    # so stop it early and try the next neighbour.
+    warm_start_max_it = int(config.get("warm_start_max_it", 50))
     checkpoint_interval = int(config.get("visualization_interval", 0))
     progress_interval = max(1, int(config.get("progress_interval", 10000)))
     verbose_solves = bool(config.get("verbose_solves", False))
@@ -267,6 +241,7 @@ def main():
     solve_time_total = 0.0
     solve_attempts = 0
     failed_nodes = 0
+    cold_starts = 0
 
     def try_solve(node_idx, label, attempt):
         nonlocal solve_time_total, solve_attempts
@@ -275,11 +250,12 @@ def main():
         try:
             return attempt(d_val, phi1_val, phi2_val)
         except RuntimeError as error:
-            print(colored_status(
-                f"  Failed solve at node {node_idx} "
-                f"(d={d_val:.6g}, phi1={phi1_val:.6g}, "
-                f"phi2={phi2_val:.6g}) using {label}: {error}", ANSI_RED
-            ))
+            if verbose_solves or label == "cold start":
+                print(colored_status(
+                    f"  Failed solve at node {node_idx} "
+                    f"(d={d_val:.6g}, phi1={phi1_val:.6g}, "
+                    f"phi2={phi2_val:.6g}) using {label}: {error}", ANSI_RED
+                ))
             return None
         finally:
             solve_time_total += time.perf_counter() - solve_start
@@ -323,9 +299,9 @@ def main():
                   f"({solve_attempts} attempts)")
 
         d_val, phi1_val, phi2_val = coords[node_idx]
-        neighbor = nearest_solved_neighbor(node_idx, shape, solved_arr)
         solution = None
-        if neighbor is not None:
+        diverged = rejected = 0
+        for neighbor in solved_neighbors(node_idx, shape, solved_arr):
             # Warm-start theta and the force multipliers from the neighbour.
             theta0 = np.empty(num_beam_dofs)
             theta0[beam_order] = theta_arr[neighbor]
@@ -333,20 +309,35 @@ def main():
             solution = try_solve(
                 node_idx, label,
                 lambda d, phi1, phi2: elastica_solver.solve(
-                    d, phi1, phi2, theta0, fx_arr[neighbor], fy_arr[neighbor]),
+                    d, phi1, phi2, theta0, fx_arr[neighbor], fy_arr[neighbor],
+                    max_it=warm_start_max_it),
             )
-            if solution is not None:
-                mac = modal_assurance_criterion(
-                    solution.theta[beam_order], theta_arr[neighbor])
-                if mac < mac_threshold:
-                    print(colored_status(
-                        f"  Rejected node {node_idx} from neighbor "
-                        f"{neighbor}: MAC={mac:.4f} < {mac_threshold:.4f}",
-                        ANSI_YELLOW,
-                    ))
-                    solution = None
+            if solution is None:
+                diverged += 1
+                continue
+            mac = modal_assurance_criterion(
+                solution.theta[beam_order], theta_arr[neighbor])
+            if mac >= mac_threshold:
+                break
+            if verbose_solves:
+                print(colored_status(
+                    f"  Rejected node {node_idx} from neighbor "
+                    f"{neighbor}: MAC={mac:.4f} < {mac_threshold:.4f}",
+                    ANSI_YELLOW,
+                ))
+            rejected += 1
+            solution = None
         if solution is None:
-            # Cold start: continue from the exact first clamped mode.
+            # Every neighbour failed (or this is the start node): cold start
+            # from the exact first clamped mode, continuing the clamp angles.
+            if node_idx != start_idx:
+                cold_starts += 1
+                print(colored_status(
+                    f"  Node {node_idx} (d={d_val:.6g}, phi1={phi1_val:.6g}, "
+                    f"phi2={phi2_val:.6g}): warm start failed from all "
+                    f"{diverged + rejected} neighbours ({diverged} diverged, "
+                    f"{rejected} rejected by MAC); cold start", ANSI_YELLOW
+                ))
             label = "cold start"
             solution = try_solve(node_idx, label, elastica_solver.cold_solve)
             if solution is None:
@@ -379,7 +370,7 @@ def main():
 
     print(f"Solved {solved_count}/{num_nodes} points "
           f"({100 * solved_count / num_nodes:.1f}%), "
-          f"{failed_nodes} failed this run")
+          f"{failed_nodes} failed and {cold_starts} extra cold starts this run")
     save_checkpoint()
     if stop_requested:
         print(f"Checkpoint saved to {live_results_npz}; rerun to resume")

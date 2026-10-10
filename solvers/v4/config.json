@@ -25,10 +25,5 @@
   "live_output_vtu": "solution_space_live.vtu",
 
   "mac_threshold": 0.85,
-
-  "cold_start": {
-    "d": 0.9,
-    "phi1": 0.4,
-    "phi2": -0.4
-  }
+  "warm_start_max_it": 50
 }
