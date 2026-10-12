@@ -40,6 +40,7 @@ dependencies:
   - certifi=2026.7.22=pyhd8ed1ab_0
   - cffi=2.1.1=py311h03d9500_0
   - cftime=1.6.5=py311he50072f_2
+  - cgns=4.5.2=he6b204c_0
   - charset-normalizer=3.5.1=pyhd8ed1ab_0
   - cli11=2.7.2=h54a6638_1
   - comm=0.2.3=pyhe01879c_0
@@ -204,6 +205,7 @@ dependencies:
   - libgomp=16.2.0=he0feb66_4
   - libharfbuzz=14.4.0=h23af247_1
   - libharfbuzz-devel=14.4.0=h23af247_1
+  - libharu=2.4.6=h36e74d4_0
   - libhwloc=2.13.0=default_he001693_1000
   - libhwy=1.4.0=h57c4cff_1
   - libiconv=1.18=h0cb94f2_3
@@ -328,6 +330,7 @@ dependencies:
   - pandoc=3.11=ha770c72_0
   - pandocfilters=1.5.0=pyhd8ed1ab_0
   - pango=1.58.2=h7bb47b9_1
+  - paraview=6.1.1=py311h8c146f4_2
   - parmetis=4.0.3=hbfcd2fd_1009
   - parso=0.8.7=pyhcf101f3_0
   - pcre2=10.47=h8b3dc9c_1
