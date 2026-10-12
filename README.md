@@ -14,7 +14,7 @@ flips with a jump.
 ```
 .
 ├── solver/                    the continuation solver, its config and the result checks
-├── postprocessing/            postprocess.py: ParaView VTU, snap surface, level sets, figures
+├── postprocessing/            postprocess.py (ParaView VTU, surfaces, figures); web/ (solution explorer)
 ├── presentation/
 │   ├── elastica_snap_surface.pptx
 │   ├── figures/               the deck's plots, written by scripts/make_figures.py
@@ -162,6 +162,27 @@ The default box is the production one: d 0.70–0.99 and φ ±π/2, step 0.01, s
 - `iso_energy.vtp`, `iso_fx.vtp`, `iso_fy.vtp`, `iso_moment_{left,right}.vtp`: level sets over
   the jump-free tetrahedra, so they end at the snap surface;
 - the PNGs used in the deck, and `summary.json` (field ranges, areas).
+
+## Solution explorer (web)
+
+```bash
+python postprocessing/web/server.py            # data/production by default; another run: give its folder
+```
+
+Open http://localhost:8765. From Windows this works too, because WSL forwards localhost, as long as
+no Windows program already uses the port. If the page says "not found", start the server with
+another port, for example `--port 8790`.
+- **Map:** one d layer coloured by q (branch), energy, f_x, f_y, M₁ or M₂, with the snap edges
+  marked. Hover to read values.
+- **Probe:** click a point to see the rod shape, θ(s), curvature θ′(s), the forces, energy and
+  moments, and profiles of the field along φ₁, φ₂ and d through that point.
+- **Compare:** Shift+click (or P) pins up to three points for comparison.
+- **Keys:** arrow keys move the probe one grid step; PgUp/PgDn change d.
+- **Export and share:** "Download θ(s) CSV" exports the rod. The URL keeps the view, so a link
+  reopens the same point.
+
+θ is read from `solution_space_live.npz` without loading it. If that file is missing, the
+first start writes a 2.4 GB `.theta.npy` cache next to the results.
 
 ## Production run (`data/production`, 2026-10-12)
 

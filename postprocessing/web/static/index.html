@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Elastica Solution Explorer</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div>
+      <h1>Elastica solution explorer</h1>
+      <p class="sub" id="runInfo">Loading…</p>
+    </div>
+    <button id="themeBtn" class="ghost" type="button" aria-label="Toggle dark mode">Dark mode</button>
+  </header>
+
+  <div id="banner" class="banner" hidden></div>
+
+  <div class="controls" role="toolbar" aria-label="View controls">
+    <div class="control">
+      <span class="label">Field</span>
+      <div class="segmented" id="fieldButtons"></div>
+    </div>
+    <div class="control grow">
+      <span class="label">d layer</span>
+      <button class="icon" id="prevLayer" type="button" aria-label="Previous d layer">‹</button>
+      <input type="range" id="layerSlider" min="0" max="0" step="1" value="0" aria-label="d layer">
+      <button class="icon" id="nextLayer" type="button" aria-label="Next d layer">›</button>
+      <output id="layerValue" class="value">d = –</output>
+    </div>
+    <label class="check"><input type="checkbox" id="showSnap" checked> Snap edges</label>
+    <label class="check"><input type="checkbox" id="showSmooth"> Smooth crossings</label>
+  </div>
+
+  <main class="grid">
+    <section class="card map-card">
+      <div class="card-head">
+        <h2 id="mapTitle">Layer</h2>
+        <span class="muted" id="mapSub"></span>
+      </div>
+      <div class="map-wrap">
+        <canvas id="map" tabindex="0" aria-label="Heat map of the selected field over phi1 and phi2. Click to probe; arrow keys move the probe."></canvas>
+        <div id="mapTip" class="tooltip" hidden></div>
+      </div>
+      <div class="legend-row">
+        <canvas id="colorbar" aria-hidden="true"></canvas>
+        <div class="legend-keys">
+          <span class="key"><i class="dot ink"></i>Snap edge</span>
+          <span class="key"><i class="dot muted-dot"></i>Smooth crossing</span>
+        </div>
+      </div>
+      <p class="hint">Click to probe · <kbd>Shift</kbd>+click or <kbd>P</kbd> to pin for comparison · arrow keys move the probe · <kbd>PgUp</kbd>/<kbd>PgDn</kbd> change d</p>
+    </section>
+
+    <section class="side">
+      <div class="card">
+        <div class="card-head">
+          <h2>Rod shape</h2>
+          <div class="actions">
+            <button id="pinBtn" type="button" class="ghost" disabled>Pin</button>
+            <button id="csvBtn" type="button" class="ghost" disabled>Download θ(s) CSV</button>
+          </div>
+        </div>
+        <canvas id="rod" class="chart rod"></canvas>
+        <div class="series-legend" id="rodLegend"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h2>Probe values</h2><span class="muted" id="probeWhere">Click the map</span></div>
+        <div class="stats" id="stats"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h2>Along the rod</h2><span class="muted">EI = L = 1</span></div>
+        <div class="pair">
+          <figure><figcaption>Tangent angle θ(s)</figcaption><canvas id="thetaChart" class="chart small"></canvas></figure>
+          <figure><figcaption>Curvature θ′(s) = bending moment</figcaption><canvas id="kappaChart" class="chart small"></canvas></figure>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <section class="card">
+    <div class="card-head"><h2>Profiles through the probe</h2><span class="muted" id="profileField"></span></div>
+    <div class="triple">
+      <figure><figcaption id="capPhi1">Along φ₁</figcaption><canvas id="profPhi1" class="chart small"></canvas></figure>
+      <figure><figcaption id="capPhi2">Along φ₂</figcaption><canvas id="profPhi2" class="chart small"></canvas></figure>
+      <figure><figcaption id="capD">Along d</figcaption><canvas id="profD" class="chart small"></canvas></figure>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head"><h2>Probed points</h2><span class="muted">The probe and up to three pinned points</span></div>
+    <div class="table-wrap">
+      <table id="pointsTable">
+        <thead><tr><th></th><th>d</th><th>φ₁</th><th>φ₂</th><th>Branch</th><th>U</th><th>f<sub>x</sub></th><th>f<sub>y</sub></th><th>M₁</th><th>M₂</th><th>q</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+  <footer class="muted">Data: the solver's results NPZ. Forces are the end reactions (Lagrange multipliers); f<sub>x</sub> &gt; 0 is compression. Snap: p changes sign with a jump (|Δq| &gt; <span id="jumpTol">0.17</span>).</footer>
+</div>
+<script src="app.js"></script>
+</body>
+</html>
