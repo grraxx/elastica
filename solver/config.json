@@ -1,0 +1,26 @@
+{
+  "d_bounds": [0.7, 0.99],
+  "phi1_bounds": [-1.5707963267948966, 1.5707963267948966],
+  "phi2_bounds": [-1.5707963267948966, 1.5707963267948966],
+  "solve_phi_symmetry": true,
+  "grid_steps": {
+    "d": 0.01,
+    "phi1": 0.01,
+    "phi2": 0.01
+  },
+  "output_npz": "solution_space.npz",
+  "beam_elements": 200,
+  "beam_grading": 0.8,
+  "snes_rtol": 1e-10,
+  "snes_atol": 1e-12,
+  "visualization_interval": 300000,
+  "progress_interval": 20000,
+  "verbose_solves": false,
+  "save_theta": true,
+  "live_results_npz": "solution_space_live.npz",
+  "output_vtu": "solution_space_results.vtu",
+  "live_output_vtu": "",
+  "warm_start_max_it": 50,
+  "jump_tol": 0.17,
+  "max_failures_per_branch": 3
+}

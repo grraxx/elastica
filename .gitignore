@@ -6,7 +6,6 @@ data/*
 *.vtu
 *.vtk
 *.pvsm
-solvers/**/*.png
 
 # Python
 __pycache__/
