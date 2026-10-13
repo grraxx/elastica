@@ -130,6 +130,29 @@ td button { background: transparent; border: 0; color: var(--muted); padding: 0 
 td button:hover { color: var(--ink); }
 footer { margin-top: 18px; font-size: 12px; }
 
+.iso-controls { margin-bottom: 10px; padding: 8px 12px; gap: 10px 20px; }
+.iso-controls select, .num { font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; padding: 4px 6px; }
+.num { width: 96px; font-variant-numeric: tabular-nums; }
+.value.small { min-width: 28px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; background: transparent; border: 1px solid var(--border);
+  border-radius: 999px; padding: 2px 10px; font-size: 12px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.chip:hover { background: var(--wash); }
+.chip .swatch { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.chip .x { color: var(--muted); padding-left: 2px; }
+.iso-wrap { position: relative; height: min(68vh, 620px); min-height: 360px; border-radius: 8px; overflow: hidden;
+  background: var(--page); border: 1px solid var(--border); }
+#iso3d { width: 100%; height: 100%; display: block; outline: none; cursor: grab; touch-action: none; }
+#iso3d:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); }
+#iso3d.dragging { cursor: grabbing; }
+.iso-labels { position: absolute; inset: 0; pointer-events: none; font-size: 11px; color: var(--muted); }
+.iso-labels span { position: absolute; transform: translate(-50%, -50%); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.iso-labels span.axis { color: var(--ink-2); font-size: 13px; font-weight: 600; }
+.iso-status { position: absolute; left: 10px; top: 10px; background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; padding: 4px 10px; font-size: 12px; color: var(--ink-2); }
+#isoColorbar { flex: 1 1 280px; height: 46px; min-width: 220px; }
+
 @media (max-width: 1050px) {
   .grid { grid-template-columns: 1fr; }
   .triple { grid-template-columns: 1fr; }

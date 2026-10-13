@@ -5,6 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Elastica Solution Explorer</title>
 <link rel="stylesheet" href="style.css">
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+               "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/" } }
+</script>
 </head>
 <body>
 <div class="app">
@@ -82,6 +86,73 @@
     </section>
   </main>
 
+  <section class="card" id="isoCard">
+    <div class="card-head">
+      <h2>Iso-surfaces in (φ₁, φ₂, d)</h2>
+      <span class="muted" id="isoInfo">Loading the 3D viewer…</span>
+    </div>
+    <div class="controls iso-controls" role="toolbar" aria-label="Iso-surface controls">
+      <div class="control">
+        <span class="label">Field</span>
+        <div class="segmented" id="isoFieldButtons"></div>
+      </div>
+      <div class="control grow">
+        <span class="label">Level</span>
+        <input type="range" id="isoSlider" min="0" max="1000" step="1" value="500" aria-label="Iso level">
+        <input type="number" id="isoLevel" class="num" step="any" aria-label="Iso level value">
+        <button id="isoKeep" type="button" class="ghost" title="Keep this surface and add another">Keep</button>
+      </div>
+      <div class="control">
+        <span class="label">Presets</span>
+        <div class="chips" id="isoPresets"></div>
+      </div>
+    </div>
+    <div class="controls iso-controls" role="toolbar" aria-label="Iso-surface display">
+      <label class="control"><span class="label">Colour</span>
+        <select id="isoColor">
+          <option value="d">by d</option>
+          <option value="level">by surface</option>
+          <option value="energy">by U</option>
+          <option value="fx">by fₓ</option>
+          <option value="fy">by fᵧ</option>
+          <option value="moment">by M₁</option>
+          <option value="moment_right">by M₂</option>
+          <option value="q">by q (branch)</option>
+        </select></label>
+      <label class="control"><span class="label">Cut</span>
+        <select id="isoClip">
+          <option value="">none</option>
+          <option value="above">hide d above the layer</option>
+          <option value="below">hide d below the layer</option>
+          <option value="mirror">hide φ₁ + φ₂ &gt; 0 (mirror plane)</option>
+          <option value="phi1">hide φ₁ &gt; 0</option>
+        </select></label>
+      <label class="control"><span class="label">Grid</span>
+        <select id="isoStride">
+          <option value="2">every 2nd φ (fast)</option>
+          <option value="1">full</option>
+        </select></label>
+      <label class="control"><span class="label">d × </span>
+        <input type="range" id="isoZs" min="2" max="16" step="0.5" value="8" aria-label="Vertical exaggeration of d">
+        <output id="isoZsValue" class="value small">8</output></label>
+      <label class="check"><input type="checkbox" id="isoSnap" checked> Snap surface</label>
+      <label class="check"><input type="checkbox" id="isoSmooth"> p = 0 smooth part</label>
+      <label class="check"><input type="checkbox" id="isoPlane" checked> d layer</label>
+      <button id="isoReset" type="button" class="ghost">Reset view</button>
+    </div>
+    <div class="iso-wrap" id="isoWrap">
+      <canvas id="iso3d" tabindex="0" aria-label="3D view of iso-surfaces over phi1, phi2 and d. Drag to rotate, right-drag to pan, wheel to zoom; click a surface to probe."></canvas>
+      <div id="isoLabels" class="iso-labels" aria-hidden="true"></div>
+      <div id="isoTip" class="tooltip" hidden></div>
+      <div id="isoStatus" class="iso-status" hidden></div>
+    </div>
+    <div class="legend-row">
+      <canvas id="isoColorbar" aria-hidden="true"></canvas>
+      <div class="chips" id="isoKept" aria-label="Surfaces shown"></div>
+    </div>
+    <p class="hint">Drag to rotate · right-drag or <kbd>Shift</kbd>+drag to pan · wheel to zoom · hover a surface to read it · click to probe that point (map, rod and profiles follow) · <kbd>Shift</kbd>+click to pin. Level sets stop at the snap surface (red): the fields jump across it.</p>
+  </section>
+
   <section class="card">
     <div class="card-head"><h2>Profiles through the probe</h2><span class="muted" id="profileField"></span></div>
     <div class="triple">
@@ -103,5 +174,7 @@
   <footer class="muted">Data: the solver's results NPZ. Forces are the end reactions (Lagrange multipliers); f<sub>x</sub> &gt; 0 is compression. Snap: p changes sign with a jump (|Δq| &gt; <span id="jumpTol">0.17</span>).</footer>
 </div>
 <script src="app.js"></script>
+<script type="module" src="viewer3d.js"
+        onerror="document.getElementById('isoInfo').textContent = 'The 3D viewer could not load three.js from cdn.jsdelivr.net (needs internet access).'"></script>
 </body>
 </html>

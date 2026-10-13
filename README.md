@@ -180,6 +180,14 @@ another port, for example `--port 8790`.
 - **Keys:** arrow keys move the probe one grid step; PgUp/PgDn change d.
 - **Export and share:** "Download θ(s) CSV" exports the rod. The URL keeps the view, so a link
   reopens the same point.
+- **Iso-surfaces in 3D:** level sets of U, f_x, f_y, M₁ or M₂ over (φ₁, φ₂, d), computed by the
+  server on demand (marching tetrahedra over the jump-free cells, as in `postprocess.py`, so
+  they stop at the snap surface, drawn in red). Drag the level slider or type a level. "Keep"
+  holds a surface so you can overlay several levels or fields. Colour the surfaces by d, by
+  surface, or by another field; cut away d above or below the current layer, or half the box
+  along the mirror plane φ₁ + φ₂ = 0. Hover a surface to read it; click to probe the nearest
+  node, and the map, rod and profiles follow. The viewer loads three.js from cdn.jsdelivr.net,
+  so the browser needs internet access.
 
 θ is read from `solution_space_live.npz` without loading it. If that file is missing, the
 first start writes a 2.4 GB `.theta.npy` cache next to the results.

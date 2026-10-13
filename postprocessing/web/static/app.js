@@ -12,6 +12,7 @@ const S = {
   pins: [],             // pinned node data, each with .slot
   column: null,         // field along d at the probe
   hover: null,
+  pendingProbe: null,   // {j, k, pin}: probe once the layer has loaded (from the 3D view)
 };
 const MAX_PINS = 3;
 const FIELD_ORDER = ["q", "energy", "fx", "fy", "moment", "moment_right"];
@@ -439,6 +440,7 @@ function renderTable() {
 }
 function renderAll() {
   drawMap(); drawColorbar(); drawRod(); rodLegend(); renderStats(); renderRodCharts(); renderProfiles(); renderTable(); writeHash();
+  if (window.viewer3d) window.viewer3d.sync();
 }
 
 // ------------------------------------------------------------------ data flow
@@ -464,7 +466,9 @@ async function loadLayer() {
   } finally {
     $("map").style.opacity = 1;
   }
-  if (S.probe && S.probe.i !== S.i) await probe(S.probe.j, S.probe.k, false);
+  const pending = S.pendingProbe; S.pendingProbe = null;
+  if (pending) await probe(pending.j, pending.k, pending.pin);
+  else if (S.probe && S.probe.i !== S.i) await probe(S.probe.j, S.probe.k, false);
   else renderAll();
 }
 let probeTicket = 0;
@@ -496,6 +500,11 @@ function setLayer(i) {
   if (i === S.i && S.layer) return;
   S.i = i; $("layerSlider").value = i; $("layerValue").textContent = `d = ${S.meta.d[i].toFixed(2)}`;
   loadLayer();
+}
+function goTo(i, j, k, pinAfter) {          // probe a node on any layer (the 3D view)
+  if (i === S.i && S.layer) return probe(j, k, pinAfter);
+  S.pendingProbe = { j, k, pin: pinAfter };
+  setLayer(i);
 }
 async function setField(field) {
   S.field = field;
@@ -590,6 +599,7 @@ function themeChanged() {
   $("themeBtn").textContent = dark ? "Light mode" : "Dark mode";
   if (S.layer) buildImage();
   renderAll();
+  if (window.viewer3d) window.viewer3d.theme();
 }
 
 async function init() {
@@ -608,6 +618,7 @@ async function init() {
   wire();                                   // sets the slider's max first
   $("layerSlider").value = S.i;
   themeChanged();
+  if (window.viewer3d) window.viewer3d.init();
   await loadLayer();
   if (h.jk) await probe(h.jk[0], h.jk[1], false);
 }
