@@ -351,7 +351,7 @@ so it needs no `branches` stage.
   and a barycentric lattice in every triangle at half the target spacing. A greedy Poisson-disk
   pass keeps the vertices first, then the lattice points, each only if no kept point lies within
   r. No two points are closer than r and no gap is wider than about 1.5 r (measured
-  nearest-neighbour distance: median 1.06 r, maximum 1.7 r). r is tuned per level until the count
+  nearest-neighbour distance: median 1.06 r, 99.9 % below 1.54 r; 63 of the 1.33 M points, up to 3.2 r). r is tuned per level until the count
   is within 3 % of the target, with a floor of 0.05 grid steps (`min_spacing`).
 - **Solve.** Warm start from the cell's corners holding up, nearest first, with main.py's tests.
   The solve lands near but not on $U_k$, because the surface came from linear interpolation;
@@ -378,12 +378,13 @@ so it needs no `branches` stage.
 
 ## Presentation
 
-`presentation/elastica_snap_surface.pptx` (41 slides; `elastica.pdf` is its LibreOffice export):
+`presentation/elastica_snap_surface.pptx` (46 slides; `elastica.pdf` is its LibreOffice export):
 the governing math, the snap surface and the buckling-mode criterion, the bistable region, the
 continuation strategy (deferral, stability test, exact cold start, mirror symmetry), the production
-results and the refined sampling. Every data plot comes from `data/production`, or for the last
-section `data/production_nn`; `presentation/scripts/make_figures.py`, `make_bistable.py` and
-`make_refinement.py` regenerate them in `presentation/figures/`. Equations are PowerPoint equations.
+results and the two refined-sampling schemes. Every data plot comes from `data/production`, or for
+the refinement sections `data/production_nn` and `data/production_iso`;
+`presentation/scripts/make_figures.py`, `make_bistable.py`, `make_refinement.py` and
+`make_refinement_iso.py` regenerate them in `presentation/figures/`. Equations are PowerPoint equations.
 
 The refined-sampling section (slides 35–41) is written for readers new to the method. It gives
 the points-per-cell rule n(U_min) with the partial-cell minimum; how the points fill a cell (what
@@ -394,6 +395,11 @@ histograms before (the production run, one state per node: 2.4 % with U < 1) and
 dataset, 7.6 M states: 28.9 % with U < 1) on the same bins and axes; and the same before/after
 in 3D, over the whole domain (the same random 1 % of points drawn from each, so dot density is
 data density) and close up on 5 × 5 × 3 cells near d = 0.97 (every point).
+
+The iso-energy section (slides 42–46) covers `refine_iso.py`: the 1/U target histogram and why, the
+levels and how many points each gets; the level surfaces and their Poisson-disk points (one level
+in 3D, and the nearest-neighbour spacing over all levels); the solve and the projection onto the
+level along the envelope-theorem gradient; and the cell and iso datasets on the same bins.
 
 The bistable-region section (slides 14–21) compares the solve with a bent-down cold start. That
 second map is the solve under θ → −θ, the mirror image in φ₁ = φ₂ with the branches swapped, so it
