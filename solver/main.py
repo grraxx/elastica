@@ -28,6 +28,16 @@ A result that passes the jump test is also rejected if it is unstable (see
 stability.py): on the anti-diagonal phi1 = -phi2 Newton follows the
 symmetric bent-up branch smoothly past the bifurcation where it loses
 stability, with no jump in p to give it away.
+
+Where both branches are stable a node stores the bent-up state: its solved
+up neighbours (p > 0) are tried before its down ones. A node reached before
+any up neighbour was solved can still take the down state, so after the
+front a promotion pass revisits every down node beside an up one: the
+reflection theta -> -theta of the state at (-phi1, -phi2), when that is a
+second, down state, gives an up state with no solve; otherwise each up
+neighbour warm-starts it, with the same tests. Promoted nodes pass the
+pass on to their down neighbours, until nothing changes. The snap surface
+is then the fold of the bent-up branch, whatever the visit order.
 """
 
 import os
@@ -39,6 +49,7 @@ for _var in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
 
 import heapq
 import itertools
+from collections import deque
 import json
 import signal
 import sys
@@ -239,6 +250,7 @@ def main():
     p_arr = np.full(num_nodes, np.nan)
     order_arr = np.full(num_nodes, -1, dtype=np.int64)   # when each node was solved
     waited_arr = np.zeros(num_nodes, dtype=bool)         # solved only after waiting
+    promoted_arr = np.zeros(num_nodes, dtype=bool)       # down state replaced by up
     solved_arr = np.zeros(num_nodes, dtype=bool)
     theta_arr = np.full((num_nodes, num_beam_dofs), np.nan, dtype=np.float32)
 
@@ -255,7 +267,8 @@ def main():
             for name, array in (("fx", fx_arr), ("fy", fy_arr),
                                 ("moment", moment_arr), ("energy", energy_arr),
                                 ("p", p_arr), ("solve_order", order_arr),
-                                ("waited", waited_arr), ("theta", theta_arr)):
+                                ("waited", waited_arr), ("promoted", promoted_arr),
+                                ("theta", theta_arr)):
                 if name in checkpoint.files:
                     array[:] = checkpoint[name]
             solved_arr[:] = checkpoint["solved"].astype(bool)
@@ -271,6 +284,7 @@ def main():
                 "energy": energy_arr, "p": p_arr, "q": p_arr / amplitude,
                 "branch": np.sign(p_arr),
                 "solve_order": order_arr, "waited": waited_arr.astype(float),
+                "promoted": promoted_arr.astype(float),
                 "solved": solved_arr.astype(float),
                 **({"theta": theta_arr} if include_theta else {})}
 
@@ -404,8 +418,13 @@ def main():
             node_tried = tried.setdefault(node_idx, set())
             node_failures = failures.setdefault(node_idx, {1.0: 0, -1.0: 0, 0.0: 0})
             solution = None
-            for neighbor in grid_neighbors(node_idx, shape):
-                if not solved_arr[neighbor] or neighbor in node_tried:
+            # Up neighbours first (the sort is stable, so nearest first within
+            # each branch): where both branches exist the node takes the up one.
+            solved_neighbors = sorted(
+                (nb for nb in grid_neighbors(node_idx, shape) if solved_arr[nb]),
+                key=lambda nb: p_arr[nb] <= 0)
+            for neighbor in solved_neighbors:
+                if neighbor in node_tried:
                     continue
                 branch = float(np.sign(p_arr[neighbor]))
                 if node_failures[branch] >= max_failures_per_branch:
@@ -472,6 +491,118 @@ def main():
         if not cold_start(node_idx):
             tried.pop(node_idx)     # give up on this node, try the next one
 
+    # Step 6: Promotion. A node reached before any up neighbour was solved can
+    # hold the down state where the up one is stable too; give it the up one.
+    def store_reflection(node_idx, fx, fy, left_moment, right_moment, energy, p,
+                         theta_sorted):
+        # theta -> -theta: the same fx and energy, opposite fy, moments and p.
+        store(node_idx, fx, -fy, -left_moment, energy, -p, -theta_sorted)
+        mirror_idx = int(mirror_indices[node_idx])
+        if mirror_idx != node_idx:
+            store(mirror_idx, fx, fy, -right_moment, energy, -p, theta_sorted[::-1])
+        promoted_arr[[node_idx, mirror_idx]] = True
+
+    def promote():
+        counts = {"by reflection": 0, "by warm start": 0, "diverged": 0,
+                  "jumped": 0, "unstable": 0}
+        i_idx, rest = np.divmod(np.arange(num_nodes), shape[1] * shape[2])
+        j_idx, k_idx = np.divmod(rest, shape[2])
+        if np.allclose(axes[1], -axes[1][::-1]) and np.allclose(axes[2], -axes[2][::-1]):
+            # The state at -x, reflected, is an up state at x when it is down
+            # there; it is a second state unless it is the stored one itself
+            # (the p = 0 S-shape on phi1 = phi2), told apart by a jump in q.
+            reflect = (i_idx * shape[1] + shape[1] - 1 - j_idx) * shape[2] + shape[2] - 1 - k_idx
+            q_arr = p_arr / amplitude
+            down = solved_arr & (p_arr < 0)
+            nodes = np.flatnonzero(solve_mask & down & down[reflect])
+            nodes = nodes[is_jump(q_arr[nodes], -q_arr[reflect[nodes]], jump_tol)]
+            source = reflect[nodes]
+            # Copied first: storing a node's mirror can overwrite another's source.
+            values = (fx_arr[source], fy_arr[source], moment_arr[source],
+                      moment_arr[mirror_indices[source]], energy_arr[source],
+                      p_arr[source], theta_arr[source])
+            for row, node_idx in enumerate(nodes):
+                store_reflection(int(node_idx), *(v[row] for v in values))
+            counts["by reflection"] = len(nodes)
+            del reflect, q_arr, down, values
+        del i_idx, rest, j_idx, k_idx
+
+        # Then a front from the up nodes into the down nodes beside them, with
+        # the front's tests, until every attempt fails: past the fold.
+        up = (solved_arr & (p_arr > 0)).reshape(shape)
+        padded = np.pad(up, 1)
+        near = np.zeros(shape, dtype=bool)
+        for di, dj, dk in NEIGHBOR_OFFSETS:
+            near |= padded[1 + di:1 + di + shape[0], 1 + dj:1 + dj + shape[1],
+                           1 + dk:1 + dk + shape[2]]
+        seeds = np.flatnonzero(near.ravel() & solve_mask & solved_arr & (p_arr < 0))
+        del up, padded, near
+        print(f"Promotion: {counts['by reflection']:,} nodes by reflection; "
+              f"front from {len(seeds):,} down nodes beside an up node")
+        failures_up = np.zeros(num_nodes, dtype=np.int16)
+        tried_up = {}
+        queue, in_queue = deque(), np.zeros(num_nodes, dtype=bool)
+
+        def push(node_idx):
+            node_idx = canonical(node_idx)
+            if (p_arr[node_idx] < 0 and failures_up[node_idx] < max_failures_per_branch
+                    and not in_queue[node_idx]):
+                in_queue[node_idx] = True
+                queue.append(node_idx)
+
+        for node_idx in seeds:
+            push(int(node_idx))
+        attempts, last_report = 0, 0
+        while queue and not stop_requested:
+            node_idx = queue.popleft()
+            in_queue[node_idx] = False
+            if not p_arr[node_idx] < 0 or failures_up[node_idx] >= max_failures_per_branch:
+                continue
+            node_tried = tried_up.setdefault(node_idx, set())
+            for neighbor in grid_neighbors(node_idx, shape):
+                if not p_arr[neighbor] > 0 or neighbor in node_tried:
+                    continue
+                node_tried.add(neighbor)
+                theta0 = np.empty(num_beam_dofs)
+                theta0[beam_order] = theta_arr[neighbor]
+                candidate = timed(
+                    elastica_solver.solve, *coords[node_idx], theta0,
+                    fx_arr[neighbor], fy_arr[neighbor], max_it=warm_start_max_it,
+                )
+                attempts += 1
+                if candidate is None:
+                    counts["diverged"] += 1
+                else:
+                    p = float(first_mode_projection(candidate.theta[beam_order], beam_x))
+                    if p <= 0 or is_jump(p_arr[neighbor] / amplitude[neighbor],
+                                         p / amplitude[node_idx], jump_tol):
+                        counts["jumped"] += 1
+                    elif unstable_directions(candidate.theta[beam_order], beam_x,
+                                             candidate.fx, candidate.fy):
+                        counts["unstable"] += 1
+                    else:
+                        accept(node_idx, candidate)
+                        mirror_idx = int(mirror_indices[node_idx])
+                        promoted_arr[[node_idx, mirror_idx]] = True
+                        counts["by warm start"] += 1
+                        for nb in itertools.chain(grid_neighbors(node_idx, shape),
+                                                  grid_neighbors(mirror_idx, shape)):
+                            push(nb)
+                        break
+                failures_up[node_idx] += 1
+                if failures_up[node_idx] >= max_failures_per_branch:
+                    break
+            if attempts - last_report >= progress_interval:
+                last_report = attempts
+                print(f"  Promotion: {attempts:,} warm starts, queue {len(queue):,}: "
+                      + ", ".join(f"{v:,} {k}" for k, v in counts.items()), flush=True)
+        print(f"Promotion {'interrupted' if stop_requested else 'done'}: {attempts:,} "
+              "warm starts; " + ", ".join(f"{v:,} {k}" for k, v in counts.items())
+              + f"; {np.count_nonzero(promoted_arr):,} nodes promoted in all")
+
+    if not stop_requested:
+        promote()
+
     solved_count = int(np.count_nonzero(solved_arr))
     print(f"Solved {solved_count:,}/{num_nodes:,} points "
           f"({100 * solved_count / num_nodes:.1f}%); "
@@ -482,7 +613,7 @@ def main():
         print(f"Checkpoint saved to {live_results_npz}; rerun to resume")
         return
 
-    # Step 6: Save NPZ and ParaView-readable VTU output.
+    # Step 7: Save NPZ and ParaView-readable VTU output.
     output_npz = config.get("results_npz", "solution_space_results.npz")
     fields = output_fields(save_theta)
     save_results_npz(output_npz, coords, tets, shape, axes, fields, beam_x)

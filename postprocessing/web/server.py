@@ -1,16 +1,21 @@
 """Solution-space explorer: a local web app for probing the solver results.
 
-usage: python postprocessing/web/server.py [data/production] [--port 8765] [--host 127.0.0.1]
+usage: python postprocessing/web/server.py [data/production] [--dataset data/production_nn/nn_dataset.npz]
+                                          [--port 8765] [--host 127.0.0.1] [--allow-remote-runs]
 
 Then open the printed address in a browser (from Windows too: WSL forwards localhost,
 unless a Windows program already uses that port; then pick another with --port).
 The argument is a run folder or its results NPZ. theta(s) is memory-mapped from
 solution_space_live.npz (stored uncompressed); without it, the first start writes a
 2.4 GB <results>.theta.npy cache next to the results.
+With the training dataset of solver/refine.py, the density fields (density*) count its
+points per grid box: each point goes to its nearest node. A box cut by the edge of the
+domain is scaled to a whole one for the points inside cells; a point on the node itself
+counts once. The counts are cached in <dataset>.density.npz.
 
 API (all GET):
     /api/meta                         grid axes, fields and their ranges
-    /api/layer?i=&field=              one d layer of a field, float32, [phi1][phi2]
+    /api/layer?i=&field=              one d layer of a field (or density), float32, [phi1][phi2]
     /api/snap?i=                      snap and smooth-crossing edge midpoints of a layer
     /api/node?i=&j=&k=                every field at a node, plus theta, x, y, curvature
     /api/column?j=&k=&field=          a field along d at fixed (phi1, phi2)
@@ -19,6 +24,16 @@ API (all GET):
     /api/snapsurface?stride=          the p = 0 surface, snap triangles first
         Both return binary little-endian: uint32 nv, nt, n_snap, 0; float32 xyz[nv][3]
         (phi1, phi2, d); float32 color[nv] (the color field, or d); uint32 tri[nt][3].
+
+Run console (console.py; each run in a new folder under data/runs):
+    GET  /api/console                 the programs, their parameters and defaults, source runs
+    GET  /api/runs                    every run with its state
+    GET  /api/runs/job?id=            a run's parameters and commands
+    GET  /api/runs/log?id=&offset=    run.log from a byte offset, and the state
+    POST /api/runs                    {program, label, params}: start a run
+    POST /api/runs/stop, /resume      {id}
+    POSTs need the header X-Elastica-Console: 1 and a JSON body (so another web page cannot
+    start runs), and are refused unless the server listens on localhost (or --allow-remote-runs).
 """
 import argparse
 import json
@@ -37,6 +52,9 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "solver"))
 from branch import is_jump  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import console  # noqa: E402
+
 STATIC = Path(__file__).resolve().parent / "static"
 JUMP_TOL = 0.17
 FIELDS = {          # name: (label, colour scale)
@@ -47,6 +65,13 @@ FIELDS = {          # name: (label, colour scale)
     "moment": ("Clamp moment M1 = θ′(0)", "symlog"),
     "moment_right": ("Clamp moment M2 = θ′(L)", "symlog"),
     "p": ("First-mode projection p", "branch"),
+}
+DENSITY = {         # name: label; points per 0.01-cube around a node, from the training dataset
+    "density": "Dataset states per grid box, both branches",
+    "density_up": "Dataset states per grid box, bent-up branch",
+    "density_down": "Dataset states per grid box, bent-down branch",
+    "density_grid": "Grid states per box, before refinement",
+    "density_neg": "Negatives per grid box (no state there)",
 }
 ISO_FIELDS = ("energy", "fx", "fy", "moment", "moment_right")
 # The six tetrahedra of a grid cell, as (di, dj, dk) corner offsets; the same split
@@ -88,8 +113,47 @@ def theta_source(results):
     return np.load(cache, mmap_mode="r")
 
 
+def box_volume(shape):
+    """Share of a whole grid box around each node that lies in the domain."""
+    volume = np.ones(shape)
+    for axis, n in enumerate(shape):
+        index = [slice(None)] * len(shape)
+        for end in (0, n - 1):
+            index[axis] = end
+            volume[tuple(index)] *= 0.5
+    return volume
+
+
+def dataset_density(path, axes):
+    """Points of the dataset per grid box (DENSITY), as (n0, n1, n2) float32 arrays."""
+    cache = path.with_name(path.name.removesuffix(".npz") + ".density.npz")
+    if cache.exists() and cache.stat().st_mtime >= path.stat().st_mtime:
+        with np.load(cache) as c:
+            if all(k in c.files for k in DENSITY):
+                return {k: c[k] for k in DENSITY}
+    print(f"Counting the points of {path} per grid box (one time)...", flush=True)
+    shape = tuple(len(a) for a in axes)
+    with np.load(path) as ds:
+        steps = [(ds[c] - a[0]) / np.diff(a).mean() for c, a in zip(("d", "phi1", "phi2"), axes)]
+        exists, branch, source = ds["exists"], ds["branch"], ds["source"]
+    index = [np.clip(np.rint(x), 0, len(a) - 1).astype(np.int64) for x, a in zip(steps, axes)]
+    node = np.ravel_multi_index(index, shape)
+    on_node = np.all([np.abs(x - i) < 1e-6 for x, i in zip(steps, index)], axis=0)
+    del steps, index
+    volume = box_volume(shape).ravel()
+    masks = {"density": exists, "density_up": exists & (branch > 0),
+             "density_down": exists & (branch < 0), "density_grid": exists & (source <= 3),
+             "density_neg": ~exists}
+    # A node's own point stands for its (cut) box, so it counts in full there.
+    weight = np.where(on_node, volume[node], 1.0)
+    out = {k: (np.bincount(node[m], weight[m], minlength=volume.size) / volume)
+           .reshape(shape).astype(np.float32) for k, m in masks.items()}
+    np.savez(cache, **out)
+    return out
+
+
 class Data:
-    def __init__(self, results):
+    def __init__(self, results, dataset=None):
         print(f"Loading {results} ...", flush=True)
         with np.load(results) as r:
             self.shape = tuple(int(n) for n in r["shape"])
@@ -100,6 +164,10 @@ class Data:
             self.waited = r["waited"].reshape(self.shape)
         self.theta = theta_source(results)
         self.run = results.parent.name
+        density = {}
+        if dataset is not None and dataset.exists():
+            density = dataset_density(dataset, (self.d, self.p1, self.p2))
+            self.fields.update(density)
         self.meta = {
             "run": self.run, "shape": self.shape, "d": self.d.tolist(),
             "phi1": self.p1.tolist(), "phi2": self.p2.tolist(), "jump_tol": JUMP_TOL,
@@ -107,7 +175,13 @@ class Data:
             "fields": {k: {"label": label, "scale": scale,
                            "min": float(self.fields[k].min()), "max": float(self.fields[k].max())}
                        for k, (label, scale) in FIELDS.items()},
+            "dataset": dataset.parent.name if density else None,
         }
+        for k, values in density.items():
+            positive = values[values > 0]
+            self.meta["fields"][k] = {"label": DENSITY[k], "scale": "count",
+                                      "min": float(positive.min()) if positive.size else 0.0,
+                                      "max": float(values.max())}
 
     @lru_cache(maxsize=64)
     def snap(self, i):
@@ -221,7 +295,10 @@ class Data:
                 "curvature": np.round(np.gradient(th, s), 6).tolist()}
 
 
-def make_handler(data):
+LOOPBACK = ("127.0.0.1", "localhost", "::1")
+
+
+def make_handler(data, allow_runs=False, local_only=True):
     class Handler(SimpleHTTPRequestHandler):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, directory=str(STATIC), **kwargs)
@@ -229,6 +306,13 @@ def make_handler(data):
         def log_message(self, fmt, *args):         # quiet: only errors
             if args and str(args[1]).startswith(("4", "5")):
                 super().log_message(fmt, *args)
+
+        def end_headers(self):
+            # Static files: revalidate on every load (a cheap 304), so an edited script is never
+            # mixed with stale cached ones. The API sets its own no-store in send().
+            if not self.path.startswith("/api/"):
+                self.send_header("Cache-Control", "no-cache")
+            super().end_headers()
 
         def send(self, body, content_type, status=HTTPStatus.OK):
             self.send_response(status)
@@ -259,7 +343,7 @@ def make_handler(data):
                     return self.send(json.dumps(data.meta).encode(), "application/json")
                 if url.path == "/api/layer":
                     field = q.get("field", "q")
-                    if field not in FIELDS:
+                    if field not in data.fields:
                         raise ValueError("unknown field")
                     body = np.ascontiguousarray(data.fields[field][index("i", n0)]).tobytes()
                     return self.send(body, "application/octet-stream")
@@ -270,10 +354,21 @@ def make_handler(data):
                     return self.send(json.dumps(body).encode(), "application/json")
                 if url.path == "/api/column":
                     field = q.get("field", "q")
-                    if field not in FIELDS:
+                    if field not in data.fields:
                         raise ValueError("unknown field")
                     values = data.fields[field][:, index("j", n1), index("k", n2)]
                     return self.send(json.dumps(values.astype(float).tolist()).encode(), "application/json")
+                if url.path == "/api/console":
+                    body = {"programs": console.schema(), "source_runs": console.source_runs(),
+                            "runs_enabled": allow_runs, "runs_dir": "data/runs"}
+                    return self.send(json.dumps(body).encode(), "application/json")
+                if url.path == "/api/runs":
+                    return self.send(json.dumps(console.runs()).encode(), "application/json")
+                if url.path == "/api/runs/job":
+                    return self.send(json.dumps(console.job(q.get("id", ""))).encode(), "application/json")
+                if url.path == "/api/runs/log":
+                    body = console.log(q.get("id", ""), int(q.get("offset", 0)))
+                    return self.send(json.dumps(body).encode(), "application/json")
                 if url.path in ("/api/iso", "/api/snapsurface"):
                     stride = int(q.get("stride", 1))
                     if stride not in (1, 2, 3, 4):
@@ -292,6 +387,39 @@ def make_handler(data):
             except (KeyError, ValueError) as err:
                 return self.error(str(err))
 
+        def do_POST(self):
+            url = urlparse(self.path)
+            if not url.path.startswith("/api/runs"):
+                return self.error("unknown endpoint", HTTPStatus.NOT_FOUND)
+            if not allow_runs:
+                return self.error("runs are disabled: the server is not on localhost "
+                                  "(start it with --allow-remote-runs to allow them)", HTTPStatus.FORBIDDEN)
+            host = self.headers.get("Host", "").rsplit(":", 1)[0].strip("[]")
+            if local_only and host not in LOOPBACK:          # another site behind a localhost name
+                return self.error("runs must be started from localhost", HTTPStatus.FORBIDDEN)
+            if self.headers.get("X-Elastica-Console") != "1" or \
+                    not self.headers.get("Content-Type", "").startswith("application/json"):
+                return self.error("missing console header", HTTPStatus.FORBIDDEN)
+            length = int(self.headers.get("Content-Length") or 0)
+            if not 0 < length <= 65536:
+                return self.error("bad body size")
+            try:
+                body = json.loads(self.rfile.read(length))
+                if not isinstance(body, dict):
+                    raise ValueError("a JSON object is needed")
+                if url.path == "/api/runs":
+                    run_id = console.start(body.get("program"), body.get("params", {}), body.get("label", ""))
+                    return self.send(json.dumps({"id": run_id}).encode(), "application/json")
+                if url.path == "/api/runs/stop":
+                    return self.send(json.dumps({"state": console.stop(body.get("id"))}).encode(),
+                                     "application/json")
+                if url.path == "/api/runs/resume":
+                    console.resume(body.get("id"))
+                    return self.send(b'{"ok": true}', "application/json")
+                return self.error("unknown endpoint", HTTPStatus.NOT_FOUND)
+            except (KeyError, ValueError, OSError) as err:      # ParamError is a ValueError
+                return self.error(str(err))
+
     return Handler
 
 
@@ -299,13 +427,19 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("run", nargs="?", type=Path, default=REPO / "data" / "production",
                     help="run folder or results NPZ (default: data/production)")
+    ap.add_argument("--dataset", type=Path, default=REPO / "data" / "production_nn" / "nn_dataset.npz",
+                    help="training dataset of solver/refine.py, for the density maps (skipped if absent)")
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--host", default="127.0.0.1", help="0.0.0.0 to serve other machines too")
+    ap.add_argument("--allow-remote-runs", action="store_true",
+                    help="let the run console start programs although the server is not on localhost")
     args = ap.parse_args()
     results = args.run / "solution_space_results.npz" if args.run.is_dir() else args.run
-    data = Data(results)
+    data = Data(results, args.dataset)
     try:
-        server = ThreadingHTTPServer((args.host, args.port), make_handler(data))
+        allow_runs = args.host in LOOPBACK or args.allow_remote_runs
+        server = ThreadingHTTPServer((args.host, args.port),
+                                     make_handler(data, allow_runs, local_only=args.host in LOOPBACK))
     except OSError as error:
         raise SystemExit(f"Port {args.port} is in use ({error.strerror}); try --port {args.port + 1}")
     print(f"Explorer for {results}\nOpen http://{'localhost' if args.host in ('127.0.0.1', '0.0.0.0') else args.host}"

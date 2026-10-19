@@ -7,16 +7,22 @@ const S = {
   qLayer: null,         // q on the current layer (branch in the tooltip)
   snap: { snap: [], smooth: [] },
   image: null,          // offscreen canvas of the coloured layer
+  contours: null,       // contour segments of the layer, built on demand: [{level, xy}]
   norm: null,
   probe: null,          // node data from /api/node
   pins: [],             // pinned node data, each with .slot
   column: null,         // field along d at the probe
   hover: null,
   pendingProbe: null,   // {j, k, pin}: probe once the layer has loaded (from the 3D view)
+  view: "2d",           // the layer as a heat map ("2d") or a height map ("3d", heightmap.js)
+  heightField: "",      // the height map's vertical field; "" follows the colour field
 };
 const MAX_PINS = 3;
-const FIELD_ORDER = ["q", "energy", "fx", "fy", "moment", "moment_right"];
-const SHORT = { q: "q (branch)", energy: "Energy U", fx: "fₓ", fy: "fᵧ", moment: "M₁", moment_right: "M₂" };
+const FIELD_ORDER = ["q", "energy", "fx", "fy", "moment", "moment_right", "density"];
+const SHORT = { q: "q (branch)", energy: "Energy U", fx: "fₓ", fy: "fᵧ", moment: "M₁", moment_right: "M₂",
+                density: "Data density", density_up: "States, bent up", density_down: "States, bent down",
+                density_grid: "States before refinement", density_neg: "Negatives" };
+const isDensity = (field) => field.startsWith("density");
 const PI_TICKS = [[-Math.PI / 2, "−π/2"], [-Math.PI / 4, "−π/4"], [0, "0"], [Math.PI / 4, "π/4"], [Math.PI / 2, "π/2"]];
 const $ = (id) => document.getElementById(id);
 const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -92,6 +98,14 @@ function makeNorm(field, values) {
     return { lut: lut([css("--seq-lo"), css("--seq-mid"), css("--seq-hi")]), f: (v) => (Math.log10(Math.max(v, 1e-12)) - a) / (b - a || 1),
              ticks, lo, hi, caption: `${S.meta.fields[field].label}   ·   log scale, this layer` };
   }
+  if (kind === "count") {
+    const { min, max } = S.meta.fields[field], a = Math.log10(Math.max(min, 1)), b = Math.log10(Math.max(max, 2));
+    const ticks = [];
+    for (let e = 0; 10 ** e <= max; e++) for (const m of [1, 2, 5]) { const v = m * 10 ** e; if (v >= min && v <= max) ticks.push(v); }
+    return { lut: lut([css("--seq-lo"), css("--seq-mid"), css("--seq-hi")]), f: (v) => (Math.log10(Math.max(v, 1)) - a) / (b - a),
+             ticks, lo: min, hi: max, empty: hexToRgb(css("--div-mid")),
+             caption: `Points per 0.01-cube around the node   ·   log scale, all layers   ·   grey: none` };
+  }
   const c = Math.max(1, amax / 1000), g = (v) => Math.sign(v) * Math.log10(1 + Math.abs(v) / c), G = g(amax) || 1;
   const ticks = [0];
   for (let e = 0; 10 ** e <= amax; e++) { const v = 10 ** e; if (v >= c) ticks.push(v, -v); }
@@ -102,14 +116,71 @@ function makeNorm(field, values) {
 function buildImage() {
   const [, n1, n2] = S.meta.shape, img = new ImageData(n1, n2), norm = makeNorm(S.field, S.layer);
   for (let j = 0; j < n1; j++) for (let k = 0; k < n2; k++) {
-    const t = Math.min(1, Math.max(0, norm.f(S.layer[j * n2 + k]))), n = Math.round(t * 255) * 3;
+    const v = S.layer[j * n2 + k], t = Math.min(1, Math.max(0, norm.f(v))), n = Math.round(t * 255) * 3;
     const p = ((n2 - 1 - k) * n1 + j) * 4;
-    img.data[p] = norm.lut[n]; img.data[p + 1] = norm.lut[n + 1]; img.data[p + 2] = norm.lut[n + 2]; img.data[p + 3] = 255;
+    const rgb = norm.empty && !(v > 0) ? norm.empty : [norm.lut[n], norm.lut[n + 1], norm.lut[n + 2]];
+    img.data[p] = rgb[0]; img.data[p + 1] = rgb[1]; img.data[p + 2] = rgb[2]; img.data[p + 3] = 255;
   }
   const off = document.createElement("canvas");
   off.width = n1; off.height = n2;
   off.getContext("2d").putImageData(img, 0, 0);
-  S.image = off; S.norm = norm;
+  S.image = off; S.norm = norm; S.contours = null;
+}
+
+// Marching squares on the layer, interpolated in the colour scale (log / symlog) so the lines match
+// the colours. Cells across a snap are skipped, as for the iso-surfaces: the field jumps there and
+// every level in between would pile up on the snap edge.
+const CONTOURS = 12;                          // levels evenly spaced in the colour scale, ~1/12 apart
+function contourLevels(norm, lo, hi) {        // round numbers nearest to those even steps
+  const cands = [0];
+  if (S.meta.fields[S.field].scale === "branch") for (let n = 1; n <= 30; n++) cands.push(n / 20, -n / 20);
+  else for (let e = -4; e <= 6; e++) for (const m of [1, 1.5, 2, 2.5, 3, 4, 5, 6, 7, 8]) cands.push(m * 10 ** e, -m * 10 ** e);
+  const inside = cands.filter((v) => v > lo && v < hi && Number.isFinite(norm.f(v)));
+  const out = new Set();
+  for (let n = 1; n < CONTOURS; n++) {
+    let best = null, gap = 0.5 / CONTOURS;
+    for (const v of inside) { const dd = Math.abs(norm.f(v) - n / CONTOURS); if (dd < gap) { gap = dd; best = v; } }
+    if (best !== null) out.add(best);
+  }
+  return [...out].sort((a, b) => a - b);
+}
+function jumps(a, b) {                        // solver/branch.py is_jump
+  const c = Math.abs(a - b);
+  return c > S.meta.jump_tol && c > 0.5 * Math.max(Math.abs(a), Math.abs(b));
+}
+function buildContours() {
+  const [, n1, n2] = S.meta.shape, { phi1: p1, phi2: p2 } = S.meta, Q = S.qLayer, norm = S.norm;
+  const t = Float32Array.from(S.layer, (v) => norm.f(v));
+  let lo = Infinity, hi = -Infinity;
+  for (const v of S.layer) if (Number.isFinite(v)) { if (v < lo) lo = v; if (v > hi) hi = v; }
+  const out = [];
+  for (const level of contourLevels(norm, lo, hi)) {
+    const L = norm.f(level), xy = [];
+    for (let j = 0; j < n1 - 1; j++) for (let k = 0; k < n2 - 1; k++) {
+      const a = j * n2 + k, b = a + n2, c = b + 1, d = a + 1;   // corners counter-clockwise
+      const ta = t[a], tb = t[b], tc = t[c], td = t[d];
+      const s = (ta > L) + (tb > L) + (tc > L) + (td > L);
+      if (s === 0 || s === 4 || !(Number.isFinite(ta + tb + tc + td))) continue;
+      if (jumps(Q[a], Q[b]) || jumps(Q[b], Q[c]) || jumps(Q[c], Q[d]) || jumps(Q[d], Q[a]) ||
+          jumps(Q[a], Q[c]) || jumps(Q[b], Q[d])) continue;
+      const pts = [];                             // crossings on edges a-b, b-c, c-d, d-a
+      const cross = (t0, t1, x0, y0, x1, y1) => {
+        if ((t0 > L) === (t1 > L)) { pts.push(null); return; }
+        const f = (L - t0) / (t1 - t0);
+        pts.push([x0 + f * (x1 - x0), y0 + f * (y1 - y0)]);
+      };
+      cross(ta, tb, p1[j], p2[k], p1[j + 1], p2[k]);
+      cross(tb, tc, p1[j + 1], p2[k], p1[j + 1], p2[k + 1]);
+      cross(tc, td, p1[j + 1], p2[k + 1], p1[j], p2[k + 1]);
+      cross(td, ta, p1[j], p2[k + 1], p1[j], p2[k]);
+      const e = pts.flatMap((p, n) => (p ? [n] : []));
+      const pairs = e.length === 2 ? [e]
+        : ((ta + tb + tc + td) / 4 > L) === (ta > L) ? [[0, 1], [2, 3]] : [[3, 0], [1, 2]];   // saddle: the centre decides
+      for (const [m, n] of pairs) xy.push(...pts[m], ...pts[n]);
+    }
+    if (xy.length) out.push({ level, xy: Float32Array.from(xy) });
+  }
+  S.contours = out;
 }
 
 // ------------------------------------------------------------------ the map
@@ -143,6 +214,20 @@ function drawMap() {
   ctx.fillStyle = css("--ink-2"); ctx.font = "12px system-ui, sans-serif"; ctx.textAlign = "center";
   ctx.fillText("φ₁", g.x0 + g.size / 2, g.y0 + g.size + 22);
   ctx.save(); ctx.translate(12, g.y0 + g.size / 2); ctx.rotate(-Math.PI / 2); ctx.fillText("φ₂", 0, 0); ctx.restore();
+  if ($("showContours").checked && !isDensity(S.field)) {
+    if (!S.contours) buildContours();
+    const kind = S.meta.fields[S.field].scale;
+    ctx.save();
+    ctx.beginPath(); ctx.rect(g.x0, g.y0, g.size, g.size); ctx.clip();
+    ctx.strokeStyle = css("--ink"); ctx.globalAlpha = 0.55; ctx.lineCap = "round";
+    for (const { level, xy } of S.contours) {
+      ctx.lineWidth = level === 0 && (kind === "symlog" || kind === "branch") ? 1.8 : 1;   // the zero line stands out
+      ctx.beginPath();
+      for (let n = 0; n < xy.length; n += 4) { ctx.moveTo(g.X(xy[n]), g.Y(xy[n + 1])); ctx.lineTo(g.X(xy[n + 2]), g.Y(xy[n + 3])); }
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
   // snap and smooth-crossing edges
   const dot = Math.max(1.6, g.size / 330);
   if ($("showSmooth").checked) {
@@ -176,6 +261,11 @@ function drawColorbar() {
     const n = Math.round(((x - x0) / (x1 - x0)) * 255) * 3;
     ctx.fillStyle = `rgb(${S.norm.lut[n]},${S.norm.lut[n + 1]},${S.norm.lut[n + 2]})`;
     ctx.fillRect(x, y0, 1, hBar);
+  }
+  if ($("showContours").checked && !isDensity(S.field) && S.contours && S.view !== "3d") {   // the contour levels, on the bar
+    ctx.save(); ctx.fillStyle = css("--ink"); ctx.globalAlpha = 0.7;
+    for (const { level } of S.contours) ctx.fillRect(Math.round(x0 + S.norm.f(level) * (x1 - x0)), y0, 1, hBar);
+    ctx.restore();
   }
   ctx.fillStyle = css("--muted"); ctx.font = "11px system-ui, sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "top";
   let last = -1e9;
@@ -441,6 +531,7 @@ function renderTable() {
 function renderAll() {
   drawMap(); drawColorbar(); drawRod(); rodLegend(); renderStats(); renderRodCharts(); renderProfiles(); renderTable(); writeHash();
   if (window.viewer3d) window.viewer3d.sync();
+  if (window.heightmap) window.heightmap.update();
 }
 
 // ------------------------------------------------------------------ data flow
@@ -507,8 +598,12 @@ function goTo(i, j, k, pinAfter) {          // probe a node on any layer (the 3D
   setLayer(i);
 }
 async function setField(field) {
+  if (field === "density") field = $("densityKind").value;
   S.field = field;
-  for (const b of $("fieldButtons").children) b.setAttribute("aria-pressed", b.dataset.field === field);
+  for (const b of $("fieldButtons").children) b.setAttribute("aria-pressed", b.dataset.field === field || (b.dataset.field === "density" && isDensity(field)));
+  $("densityControl").hidden = !isDensity(field);
+  if (isDensity(field)) $("densityKind").value = field;
+  contourAvailability();
   if (S.probe) S.column = await getJSON(`/api/column?j=${S.probe.j}&k=${S.probe.k}&field=${field}`).catch(() => null);
   loadLayer();
 }
@@ -517,13 +612,16 @@ async function setField(field) {
 function writeHash() {
   const parts = [`d=${S.meta.d[S.i].toFixed(2)}`, `field=${S.field}`];
   if (S.probe) parts.push(`phi1=${S.probe.phi1.toFixed(4)}`, `phi2=${S.probe.phi2.toFixed(4)}`);
+  if (S.view === "3d") parts.push("view=3d", ...(S.heightField ? [`height=${S.heightField}`] : []));
   history.replaceState(null, "", `#${parts.join("&")}`);
 }
 function readHash() {
   const h = new URLSearchParams(location.hash.slice(1)), nearest = (arr, v) => arr.reduce((b, x, n) => (Math.abs(x - v) < Math.abs(arr[b] - v) ? n : b), 0);
   const out = {};
   if (h.has("d")) out.i = nearest(S.meta.d, +h.get("d"));
-  if (h.has("field") && FIELD_ORDER.includes(h.get("field"))) out.field = h.get("field");
+  if (h.has("field") && (FIELD_ORDER.includes(h.get("field")) || isDensity(h.get("field"))) && S.meta.fields[h.get("field")]) out.field = h.get("field");
+  if (h.get("view") === "3d") out.view = "3d";
+  if (h.has("height") && S.meta.fields[h.get("height")] && SHORT[h.get("height")]) out.height = h.get("height");
   if (h.has("phi1") && h.has("phi2")) out.jk = [nearest(S.meta.phi1, +h.get("phi1")), nearest(S.meta.phi2, +h.get("phi2"))];
   return out;
 }
@@ -531,15 +629,22 @@ function readHash() {
 // ------------------------------------------------------------------ events
 function wire() {
   for (const f of FIELD_ORDER) {
+    if (!S.meta.fields[f]) continue;               // no training dataset: no density maps
     const b = document.createElement("button"); b.type = "button"; b.dataset.field = f; b.textContent = SHORT[f];
-    b.title = S.meta.fields[f].label; b.setAttribute("aria-pressed", f === S.field);
+    b.title = f === "density" ? "Points of the training dataset around each node" : S.meta.fields[f].label;
+    b.setAttribute("aria-pressed", f === S.field || (f === "density" && isDensity(S.field)));
     b.addEventListener("click", () => setField(f)); $("fieldButtons").appendChild(b);
   }
+  $("densityControl").hidden = !isDensity(S.field);
+  if (isDensity(S.field)) $("densityKind").value = S.field;
+  $("densityKind").addEventListener("change", (e) => setField(e.target.value));
   $("layerSlider").max = S.meta.d.length - 1;
   $("layerSlider").addEventListener("input", (e) => setLayer(+e.target.value));
   $("prevLayer").addEventListener("click", () => setLayer(S.i - 1));
   $("nextLayer").addEventListener("click", () => setLayer(S.i + 1));
   for (const id of ["showSnap", "showSmooth"]) $(id).addEventListener("change", drawMap);
+  $("showContours").addEventListener("change", () => { contourAvailability(); drawMap(); drawColorbar(); });
+  contourAvailability();
   const map = $("map"), tip = $("mapTip");
   map.addEventListener("pointermove", (e) => {
     const at = mapIndexAt(e);
@@ -547,7 +652,7 @@ function wire() {
     S.hover = at; drawMap();
     const n2 = S.meta.shape[2], v = S.layer[at.j * n2 + at.k], q = S.qLayer[at.j * n2 + at.k];
     tip.replaceChildren();
-    const strong = document.createElement("strong"); strong.textContent = `${fmt(v)}`;
+    const strong = document.createElement("strong"); strong.textContent = isDensity(S.field) ? `${fmt(v, 3)} points` : `${fmt(v)}`;
     const name = document.createElement("span"); name.className = "sec"; name.textContent = ` ${SHORT[S.field]}`;
     const l1 = document.createElement("div"); l1.append(strong, name);
     const l2 = document.createElement("div"); l2.className = "sec"; l2.textContent = `φ₁ ${fmtPhi(S.meta.phi1[at.j])}, φ₂ ${fmtPhi(S.meta.phi2[at.k])} · ${branchName(q)}`;
@@ -593,6 +698,12 @@ function wire() {
   attachRodHover();
   new ResizeObserver(() => renderAll()).observe(document.querySelector(".app"));
 }
+function contourAvailability() {           // point counts are speckle: no contours for them
+  const box = $("showContours"), off = isDensity(S.field);
+  box.disabled = off;
+  box.parentElement.title = off ? "No contours for the point counts of the density maps" : "Contour lines of the field on this layer";
+  $("contourKey").hidden = off || !box.checked;
+}
 function themeChanged() {
   const dark = document.documentElement.dataset.theme === "dark" ||
     (!document.documentElement.dataset.theme && matchMedia("(prefers-color-scheme: dark)").matches);
@@ -600,6 +711,7 @@ function themeChanged() {
   if (S.layer) buildImage();
   renderAll();
   if (window.viewer3d) window.viewer3d.theme();
+  if (window.heightmap) window.heightmap.theme();
 }
 
 async function init() {
@@ -610,15 +722,19 @@ async function init() {
     showBanner(`Could not reach the server: ${err.message}`); return;
   }
   const n = S.meta.shape.reduce((a, b) => a * b, 1);
-  $("runInfo").textContent = `Run “${S.meta.run}” · ${n.toLocaleString("en-US")} equilibria · d ${S.meta.d[0].toFixed(2)}–${S.meta.d[S.meta.d.length - 1].toFixed(2)} · φ ±π/2`;
+  $("runInfo").textContent = `Run “${S.meta.run}” · ${n.toLocaleString("en-US")} equilibria · d ${S.meta.d[0].toFixed(2)}–${S.meta.d[S.meta.d.length - 1].toFixed(2)} · φ ±π/2`
+    + (S.meta.dataset ? ` · density maps from “${S.meta.dataset}”` : "");
   $("jumpTol").textContent = S.meta.jump_tol;
   const h = readHash();
   if (h.field) S.field = h.field;
   if (h.i !== undefined) S.i = h.i;
+  if (h.view) S.view = h.view;
+  if (h.height) S.heightField = h.height;
   wire();                                   // sets the slider's max first
   $("layerSlider").value = S.i;
   themeChanged();
   if (window.viewer3d) window.viewer3d.init();
+  if (window.heightmap) window.heightmap.init();
   await loadLayer();
   if (h.jk) await probe(h.jk[0], h.jk[1], false);
 }

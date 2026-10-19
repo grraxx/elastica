@@ -7,6 +7,7 @@ several files exceed GitHub's 100 MB limit). Each run is a folder holding its `c
 ## `production/` (2026-10-12)
 
 d 0.70–0.99, φ₁, φ₂ ∈ [−π/2, π/2], step 0.01: 30 × 315 × 315 = 2,976,750 nodes, all solved.
+On 2026-10-19 a promotion pass gave 1,571 bistable nodes the bent-up state (see the main README).
 
 | File | Contents |
 |---|---|
@@ -19,5 +20,7 @@ d 0.70–0.99, φ₁, φ₂ ∈ [−π/2, π/2], step 0.01: 30 × 315 × 315 = 2
 | `checkpoint_reports/` | validation reports written during the run |
 | `run_part1.log`, `run.log` | solver logs: the run was stopped once at 1.77 M nodes and resumed |
 | `validation_part1.log`, `validation.log`, `validation_final.log` | `validate_results.py` reports |
-| `stability_full.log` | stability re-test of every node |
+| `stability_full.log` | stability re-test of every node (of the promoted map) |
+| `promotion.log`, `validation_promoted.log` | the promotion pass (2026-10-19: `main.py` resumed on the finished run) and its validation |
+| `pre_promotion/` | the results, VTU, `post/` and stability log from before the promotion pass |
 | `unsolve_unstable.py`, `watch_checkpoints.sh` | one-off tools used during the run |

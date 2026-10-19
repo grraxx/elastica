@@ -23,7 +23,8 @@ Writes to the output directory:
     snap_surface.png, snap_layers.png          the p = 0 surface; q per d layer
     iso_energy.png, iso_force_fx.png, iso_force_fy.png, iso_moment.png
         one panel per level, coloured by d; *_layers.png: level lines per d layer
-    summary.json                  field ranges and the area of every level set
+    energy_histogram.png          nodes per energy bin; min, median and 10-90 % of U per d
+    summary.json                 field ranges and the area of every level set
 
 usage: python postprocess.py results.npz [-o outdir] [--tol 0.17]
 """
@@ -64,7 +65,7 @@ LEVELS = {
     "moment_left": [-12, -8, -4, 0, 4, 8, 12],
     "moment_right": [-12, -8, -4, 0, 4, 8, 12],
 }
-
+ENERGY_BANDS = [1.0, 3.0]                    # band edges of the planned low-energy refinement
 
 def write_stl(path, points, triangles, title):
     tri = points[triangles].astype(np.float32)
@@ -131,6 +132,9 @@ def set_camera(plotter, azimuth, elevation=24.0, distance=11.5):
 
 def render_panels(panels, path, title, size_per_panel=(760, 640), columns=None):
     """panels: list of (subtitle, [(mesh, add_mesh kwargs), ...], azimuth)."""
+    if not panels:                                  # e.g. no preset level inside a small box
+        print(f"skipped {path}: nothing to draw")
+        return
     columns = columns or len(panels)
     rows = int(np.ceil(len(panels) / columns))
     plotter = pv.Plotter(off_screen=True, shape=(rows, columns), border=False,
@@ -162,6 +166,55 @@ def render_panels(panels, path, title, size_per_panel=(760, 640), columns=None):
         plotter.add_text(title, position="lower_left", font_size=9, color="#5C6B7A")
     plotter.screenshot(path)
     plotter.close()
+
+
+def energy_histogram(energy, d, d_vals, path, what="grid nodes"):
+    """Points (what) per energy bin (linear U, the tail beyond the 99.5th percentile counted
+    in a note), and the min, median and 10-90 % band of U in each d layer."""
+    ink, ink2, grid_colour, blue, surface = "#0b0b0b", "#52514e", "#e4e3df", "#2a78d6", "#fcfcfb"
+    fig, (a1, a2) = plt.subplots(1, 2, figsize=(13, 4.6), facecolor=surface,
+                                 gridspec_kw={"width_ratios": [1.25, 1]})
+    for ax in (a1, a2):
+        ax.set_facecolor(surface); ax.grid(axis="y", color=grid_colour, lw=0.8)
+        ax.set_axisbelow(True); ax.spines[["top", "right"]].set_visible(False)
+
+    x_max = float(np.ceil(np.percentile(energy, 99.5) / 5) * 5)
+    counts, edges = np.histogram(energy, np.arange(0.0, x_max + 0.25, 0.25))
+    a1.bar(edges[:-1], counts, width=np.diff(edges), align="edge", color=blue,
+           edgecolor=surface, linewidth=0.5)
+    a1.set_xlim(0, x_max)
+    a1.set_xlabel("bending energy U  (bin width 0.25)"); a1.set_ylabel(f"{what} per bin")
+    a1.yaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda v, _: f"{v / 1e3:.0f}k"))
+    bounds = [0.0, *ENERGY_BANDS, np.inf]
+    lines = []
+    for lo, hi in zip(bounds[:-1], bounds[1:]):
+        n = int(((energy >= lo) & (energy < hi)).sum())
+        band = f"U < {hi:g}" if lo == 0 else f"U ≥ {lo:g}" if hi == np.inf else f"{lo:g} ≤ U < {hi:g}"
+        lines.append(f"{band}: {n / 1e3:,.0f}k ({n / len(energy):.1%})")
+    tail = int((energy >= x_max).sum())
+    lines.append(f"beyond {x_max:g} (not shown): {tail:,}, max {energy.max():.1f}")
+    a1.text(0.98, 0.96, "\n".join(lines), transform=a1.transAxes, ha="right", va="top",
+            color=ink, fontsize=9, linespacing=1.5)
+    for edge in ENERGY_BANDS:
+        a1.axvline(edge, color=ink2, lw=1, ls="--")
+    a1.set_title(f"Energy histogram ({len(energy):,} {what})", loc="left", color=ink)
+
+    layer = np.rint((d - d_vals[0]) / np.diff(d_vals).mean()).astype(int)
+    stats = np.array([[np.min(e), np.median(e), *np.percentile(e, [10, 90])]
+                      for e in (energy[layer == i] for i in range(len(d_vals)))])
+    a2.fill_between(d_vals, stats[:, 2], stats[:, 3], color=blue, alpha=0.15, lw=0)
+    a2.plot(d_vals, stats[:, 1], color=blue, lw=2)
+    a2.plot(d_vals, stats[:, 0], color=blue, lw=1.2, ls="--")
+    for edge in ENERGY_BANDS:
+        a2.axhline(edge, color=ink2, lw=1, ls="--")
+    a2.set_yscale("log"); a2.set_xlabel("end-to-end distance d"); a2.set_ylabel("U (log scale)")
+    a2.text(d_vals[0], stats[0, 1] * 1.08, "median", color=ink, fontsize=9)
+    a2.text(d_vals[0], stats[0, 0] * 0.8, "min ≈ 10(1−d)", color=ink, fontsize=9, va="top")
+    a2.text(d_vals[0], stats[0, 3] * 1.08, "10–90 % band", color=ink2, fontsize=9)
+    a2.set_title("Energy spread per d layer", loc="left", color=ink)
+    fig.tight_layout()
+    fig.savefig(path, dpi=130, facecolor=surface)
+    plt.close(fig)
 
 
 def scaled(mesh):
@@ -226,6 +279,7 @@ def main():
     writer.SetCompressorTypeToZLib()
     writer.Write()
     print(f"wrote {out / 'elastica_solution_space.vtu'}")
+    energy_histogram(f["energy"], coords[:, 0], d_vals, out / "energy_histogram.png")
 
     summary = {"tol_q": args.tol, "nodes": len(coords), "tetrahedra": len(tets),
                "jump_tetrahedra": int(jump_cell.sum()),
@@ -234,35 +288,40 @@ def main():
                                      for i, d in enumerate(d_vals)}}
 
     # 1. Snap surface: p = 0, coloured by whether p jumps there.
-    snap_surface = contour(grid, "p", [0.0])
-    snap_surface.point_data["snap"] = (np.asarray(snap_surface.point_data["snap"]) > 0.5).astype(float)
-    tri = snap_surface.triangulate().regular_faces
-    is_snap = np.asarray(snap_surface.point_data["snap"])[tri].mean(axis=1) > 0.5
-    snap_surface.save(out / "snap_surface.vtp")
-    write_stl(out / "snap_surface.stl", snap_surface.points, tri,
-              "p = 0 surface of the clamped elastica, x = phi1, y = phi2, z = d")
-    write_stl(out / "snap_surface_jump.stl", snap_surface.points, tri[is_snap],
-              "snap part of the p = 0 surface, x = phi1, y = phi2, z = d")
-    sizes = snap_surface.triangulate().compute_cell_sizes(length=False, volume=False)
-    area = np.asarray(sizes.cell_data["Area"])
-    summary["snap_surface"] = {"triangles": int(len(tri)), "snap_triangles": int(is_snap.sum()),
-                               "area_snap": float(area[is_snap].sum()),
-                               "area_smooth": float(area[~is_snap].sum())}
     global BOUNDS
     BOUNDS = (p1_vals[0], p1_vals[-1], p2_vals[0], p2_vals[-1], d_vals[0] * ZS, d_vals[-1] * ZS)
-    surf = scaled(snap_surface.triangulate())
-    snap_part = surf.extract_cells(np.flatnonzero(is_snap)).extract_surface()
-    smooth_part = surf.extract_cells(np.flatnonzero(~is_snap)).extract_surface()
-    box = pv.Box(bounds=BOUNDS).extract_all_edges()
-    frame = (box, dict(color="#9AA5B1", line_width=1))
-    snap_style = dict(color="#C8553D", smooth_shading=True, specular=0.25)
-    smooth_style = dict(color="#7F8C99", smooth_shading=True, specular=0.25)
-    render_panels([(view, [(snap_part, snap_style), (smooth_part, smooth_style), frame], az)
-                   for view, az in (("from phi1 > 0, phi2 < 0", -50), ("from phi1 > 0, phi2 > 0", 40),
-                                    ("from above", -50.0001))][:2],
-                  out / "snap_surface.png",
-                  "p = 0 surface. Red: snap (p jumps, bent up <-> bent down). "
-                  "Grey: smooth zero crossing through an S-shape.", size_per_panel=(1000, 820))
+    frame = (pv.Box(bounds=BOUNDS).extract_all_edges(), dict(color="#9AA5B1", line_width=1))
+    snap_part = None
+    snap_surface = contour(grid, "p", [0.0])
+    if snap_surface.n_points == 0:                # a box where p never changes sign
+        print("no p = 0 surface in this box: snap-surface files skipped")
+        summary["snap_surface"] = {"triangles": 0, "snap_triangles": 0, "area_snap": 0.0,
+                                   "area_smooth": 0.0}
+    else:
+        snap_surface.point_data["snap"] = (np.asarray(snap_surface.point_data["snap"]) > 0.5).astype(float)
+        tri = snap_surface.triangulate().regular_faces
+        is_snap = np.asarray(snap_surface.point_data["snap"])[tri].mean(axis=1) > 0.5
+        snap_surface.save(out / "snap_surface.vtp")
+        write_stl(out / "snap_surface.stl", snap_surface.points, tri,
+                  "p = 0 surface of the clamped elastica, x = phi1, y = phi2, z = d")
+        write_stl(out / "snap_surface_jump.stl", snap_surface.points, tri[is_snap],
+                  "snap part of the p = 0 surface, x = phi1, y = phi2, z = d")
+        sizes = snap_surface.triangulate().compute_cell_sizes(length=False, volume=False)
+        area = np.asarray(sizes.cell_data["Area"])
+        summary["snap_surface"] = {"triangles": int(len(tri)), "snap_triangles": int(is_snap.sum()),
+                                   "area_snap": float(area[is_snap].sum()),
+                                   "area_smooth": float(area[~is_snap].sum())}
+        surf = scaled(snap_surface.triangulate())
+        snap_part = surf.extract_cells(np.flatnonzero(is_snap)).extract_surface()
+        smooth_part = surf.extract_cells(np.flatnonzero(~is_snap)).extract_surface()
+        snap_style = dict(color="#C8553D", smooth_shading=True, specular=0.25)
+        smooth_style = dict(color="#7F8C99", smooth_shading=True, specular=0.25)
+        render_panels([(view, [(snap_part, snap_style), (smooth_part, smooth_style), frame], az)
+                       for view, az in (("from phi1 > 0, phi2 < 0", -50), ("from phi1 > 0, phi2 > 0", 40),
+                                        ("from above", -50.0001))][:2],
+                      out / "snap_surface.png",
+                      "p = 0 surface. Red: snap (p jumps, bent up <-> bent down). "
+                      "Grey: smooth zero crossing through an S-shape.", size_per_panel=(1000, 820))
 
     # Per-layer maps of q, with snap nodes.
     P = f["p"].reshape(shape); Q = q.reshape(shape); S = snap_node.reshape(shape)
@@ -298,7 +357,7 @@ def main():
         surfaces[name].save(out / f"iso_{name}.vtp")
         summary["level_sets"][name] = area_per_level(surfaces[name], levels)
         print(f"iso_{name}: {surfaces[name].n_cells:,} triangles, levels {levels}")
-    ghost = (snap_part, dict(color="#C8553D", opacity=0.12))
+    ghost = [(snap_part, dict(color="#C8553D", opacity=0.12))] if snap_part is not None and snap_part.n_points else []
     titles = {"energy": "U", "fx": "fx", "fy": "fy", "moment_left": "M1", "moment_right": "M2"}
     picks = {"energy": [2, 8, 16, 64], "fx": [-100, 0, 20, 60], "fy": [-10, 0, 10, 20],
              "moment_left": [-8, -4, 0, 4], "moment_right": [-8, -4, 0, 4]}
@@ -324,7 +383,7 @@ def main():
             panels.append((f"{titles[name]} = {level:g}",
                            [(part, dict(scalars="d", cmap="viridis", clim=(d_vals[0], d_vals[-1]),
                                         smooth_shading=True, show_scalar_bar=False)),
-                            ghost, frame], -50))
+                            *ghost, frame], -50))
         render_panels(panels, out / file, captions[name], size_per_panel=(760, 680))
 
     # Layer maps of each field, contour lines at the levels, broken at snap nodes.

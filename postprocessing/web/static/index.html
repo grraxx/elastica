@@ -17,7 +17,10 @@
       <h1>Elastica solution explorer</h1>
       <p class="sub" id="runInfo">Loading…</p>
     </div>
-    <button id="themeBtn" class="ghost" type="button" aria-label="Toggle dark mode">Dark mode</button>
+    <div class="actions">
+      <a class="ghost" href="#consoleCard">Run console</a>
+      <button id="themeBtn" class="ghost" type="button" aria-label="Toggle dark mode">Dark mode</button>
+    </div>
   </header>
 
   <div id="banner" class="banner" hidden></div>
@@ -27,6 +30,14 @@
       <span class="label">Field</span>
       <div class="segmented" id="fieldButtons"></div>
     </div>
+    <label class="control" id="densityControl" hidden><span class="label">Points</span>
+      <select id="densityKind">
+        <option value="density">all states</option>
+        <option value="density_up">bent-up branch</option>
+        <option value="density_down">bent-down branch</option>
+        <option value="density_grid">before refinement</option>
+        <option value="density_neg">negatives (past a fold)</option>
+      </select></label>
     <div class="control grow">
       <span class="label">d layer</span>
       <button class="icon" id="prevLayer" type="button" aria-label="Previous d layer">‹</button>
@@ -34,6 +45,7 @@
       <button class="icon" id="nextLayer" type="button" aria-label="Next d layer">›</button>
       <output id="layerValue" class="value">d = –</output>
     </div>
+    <label class="check"><input type="checkbox" id="showContours"> Contours</label>
     <label class="check"><input type="checkbox" id="showSnap" checked> Snap edges</label>
     <label class="check"><input type="checkbox" id="showSmooth"> Smooth crossings</label>
   </div>
@@ -44,8 +56,22 @@
         <h2 id="mapTitle">Layer</h2>
         <span class="muted" id="mapSub"></span>
       </div>
+      <div class="map-view" role="toolbar" aria-label="Map view">
+        <div class="segmented" id="viewButtons">
+          <button type="button" data-view="2d" aria-pressed="true">2D map</button>
+          <button type="button" data-view="3d" aria-pressed="false" disabled title="Needs three.js from cdn.jsdelivr.net">3D height</button>
+        </div>
+        <label class="control" id="heightControl" hidden><span class="label">Height</span>
+          <select id="heightField" aria-label="Field on the vertical axis"></select></label>
+        <label class="control" id="heightZsControl" hidden><span class="label">z ×</span>
+          <input type="range" id="heightZs" min="0.1" max="1.5" step="0.05" value="0.5" aria-label="Vertical exaggeration">
+          <output id="heightZsValue" class="value small">0.50</output></label>
+        <button id="heightReset" type="button" class="ghost" hidden>Reset view</button>
+      </div>
       <div class="map-wrap">
         <canvas id="map" tabindex="0" aria-label="Heat map of the selected field over phi1 and phi2. Click to probe; arrow keys move the probe."></canvas>
+        <canvas id="map3d" tabindex="0" hidden aria-label="3D height map of the layer over phi1 and phi2. Drag to rotate, right-drag to pan, wheel to zoom; click to probe, arrow keys move the probe."></canvas>
+        <div id="mapLabels" class="iso-labels" aria-hidden="true" hidden></div>
         <div id="mapTip" class="tooltip" hidden></div>
       </div>
       <div class="legend-row">
@@ -53,9 +79,12 @@
         <div class="legend-keys">
           <span class="key"><i class="dot ink"></i>Snap edge</span>
           <span class="key"><i class="dot muted-dot"></i>Smooth crossing</span>
+          <span class="key" id="contourKey" hidden><i class="line-key"></i>Contours: levels marked on the colour bar</span>
         </div>
+        <span class="muted height-info" id="heightInfo" hidden></span>
       </div>
-      <p class="hint">Click to probe · <kbd>Shift</kbd>+click or <kbd>P</kbd> to pin for comparison · arrow keys move the probe · <kbd>PgUp</kbd>/<kbd>PgDn</kbd> change d</p>
+      <p class="hint" id="mapHint3d" hidden>Drag to rotate · right-drag or <kbd>Shift</kbd>+drag to pan · wheel to zoom · click to probe · <kbd>Shift</kbd>+click to pin · arrow keys move the probe · <kbd>PgUp</kbd>/<kbd>PgDn</kbd> change d. Colour is the field above; height is the chosen field on the same scale as its heat map.</p>
+      <p class="hint" id="mapHint">Click to probe · <kbd>Shift</kbd>+click or <kbd>P</kbd> to pin for comparison · arrow keys move the probe · <kbd>PgUp</kbd>/<kbd>PgDn</kbd> change d</p>
     </section>
 
     <section class="side">
@@ -171,9 +200,51 @@
       </table>
     </div>
   </section>
-  <footer class="muted">Data: the solver's results NPZ. Forces are the end reactions (Lagrange multipliers); f<sub>x</sub> &gt; 0 is compression. Snap: p changes sign with a jump (|Δq| &gt; <span id="jumpTol">0.17</span>).</footer>
+  <section class="card" id="consoleCard">
+    <div class="card-head">
+      <h2>Run console</h2>
+      <span class="muted" id="consoleInfo">Edit the parameters and run. Every run gets a new folder in data/runs; nothing is overwritten.</span>
+    </div>
+    <div id="consoleBanner" class="banner" hidden></div>
+    <div class="console-grid">
+      <div class="console-form">
+        <div class="segmented" id="programTabs" role="tablist" aria-label="Program"></div>
+        <p class="about" id="programAbout"></p>
+        <form id="paramForm" autocomplete="off"></form>
+        <div class="run-row">
+          <label class="control"><span class="label">Run name</span>
+            <input type="text" id="runLabel" class="text" maxlength="80" placeholder="optional, e.g. finer beam"></label>
+          <span class="muted" id="runEstimate"></span>
+        </div>
+        <div class="run-row">
+          <button type="button" id="runBtn" class="primary">Run</button>
+          <button type="button" id="resetBtn" class="ghost">Defaults</button>
+          <span class="muted" id="runCommand"></span>
+        </div>
+      </div>
+      <div class="console-runs">
+        <div class="table-wrap runs-wrap">
+          <table id="runsTable">
+            <thead><tr><th>Run</th><th>Program</th><th>State</th><th>Started</th><th>Time</th><th></th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div class="log-head">
+          <strong id="logTitle">Log</strong>
+          <span class="muted" id="logInfo">Pick a run</span>
+          <label class="check"><input type="checkbox" id="logFollow" checked> Follow</label>
+        </div>
+        <pre id="runLog" class="run-log" tabindex="0" aria-label="Run log"></pre>
+        <p class="hint" id="logHint"></p>
+      </div>
+    </div>
+  </section>
+
+  <footer class="muted">Data: the solver's results NPZ; the density maps count the points of the training dataset (solver/refine.py) around each node, per 0.01-cube. Forces are the end reactions (Lagrange multipliers); f<sub>x</sub> &gt; 0 is compression. Snap: p changes sign with a jump (|Δq| &gt; <span id="jumpTol">0.17</span>).</footer>
 </div>
 <script src="app.js"></script>
+<script src="console.js"></script>
+<script type="module" src="heightmap.js"></script>
 <script type="module" src="viewer3d.js"
         onerror="document.getElementById('isoInfo').textContent = 'The 3D viewer could not load three.js from cdn.jsdelivr.net (needs internet access).'"></script>
 </body>
