@@ -1,6 +1,6 @@
 """Solution-space explorer: a local web app for probing the solver results.
 
-usage: python postprocessing/web/server.py [data/production] [--dataset data/production_nn/nn_dataset.npz]
+usage: python postprocessing/web/server.py [data/production] [--dataset data/production_nn/nn_dataset.npz ...]
                                           [--port 8765] [--host 127.0.0.1] [--allow-remote-runs]
 
 Then open the printed address in a browser (from Windows too: WSL forwards localhost,
@@ -8,9 +8,13 @@ unless a Windows program already uses that port; then pick another with --port).
 The argument is a run folder or its results NPZ. theta(s) is memory-mapped from
 solution_space_live.npz (stored uncompressed); without it, the first start writes a
 2.4 GB <results>.theta.npy cache next to the results.
-With the training dataset of solver/refine.py, the density fields (density*) count its
-points per grid box: each point goes to its nearest node. A box cut by the edge of the
-domain is scaled to a whole one for the points inside cells; a point on the node itself
+With the training datasets of solver/refine.py, the density fields (density*) count their
+points per grid box, one set per dataset: by default the cells scheme (data/production_nn),
+the iso-energy scheme (data/production_iso) and the energy-shell scheme
+(data/production_shell), told apart by the "scheme" of the config.json beside each. The cells scheme keeps the plain names
+(density, density_up, ...);
+any other scheme gets its name as a suffix (density_iso, density_up_shell, ...). Each point
+goes to its nearest node. A box cut by the edge of the domain is scaled to a whole one for the points inside cells; a point on the node itself
 counts once. The counts are cached in <dataset>.density.npz.
 
 API (all GET):
@@ -73,6 +77,8 @@ DENSITY = {         # name: label; points per 0.01-cube around a node, from the 
     "density_grid": "Grid states per box, before refinement",
     "density_neg": "Negatives per grid box (no state there)",
 }
+SCHEMES = {"cells": "cells scheme", "iso": "iso-energy scheme",     # refine.py's "scheme"
+           "shell": "energy-shell scheme"}
 ISO_FIELDS = ("energy", "fx", "fy", "moment", "moment_right")
 # The six tetrahedra of a grid cell, as (di, dj, dk) corner offsets; the same split
 # of each cube along its 000-111 diagonal as solver/mesh_generator.py.
@@ -152,8 +158,16 @@ def dataset_density(path, axes):
     return out
 
 
+def dataset_scheme(path):
+    """The sampling scheme of a refine.py dataset: "scheme" in the config.json beside it."""
+    try:
+        return json.loads((path.parent / "config.json").read_text()).get("scheme", "cells")
+    except (OSError, ValueError):
+        return "cells"
+
+
 class Data:
-    def __init__(self, results, dataset=None):
+    def __init__(self, results, datasets=()):
         print(f"Loading {results} ...", flush=True)
         with np.load(results) as r:
             self.shape = tuple(int(n) for n in r["shape"])
@@ -164,10 +178,20 @@ class Data:
             self.waited = r["waited"].reshape(self.shape)
         self.theta = theta_source(results)
         self.run = results.parent.name
-        density = {}
-        if dataset is not None and dataset.exists():
-            density = dataset_density(dataset, (self.d, self.p1, self.p2))
-            self.fields.update(density)
+        density, labels, self.datasets = {}, {}, []
+        for path in datasets:
+            if not path.exists():
+                continue
+            scheme = dataset_scheme(path)
+            suffix = "" if scheme == "cells" else f"_{scheme}"
+            if any(ds["suffix"] == suffix for ds in self.datasets):      # two of one scheme
+                suffix += f"_{len(self.datasets)}"
+            self.datasets.append({"name": path.parent.name, "scheme": scheme, "suffix": suffix,
+                                  "label": SCHEMES.get(scheme, f"{scheme} scheme")})
+            for k, values in dataset_density(path, (self.d, self.p1, self.p2)).items():
+                density[k + suffix] = values
+                labels[k + suffix] = f"{DENSITY[k]}, {SCHEMES.get(scheme, scheme + ' scheme')}"
+        self.fields.update(density)
         self.meta = {
             "run": self.run, "shape": self.shape, "d": self.d.tolist(),
             "phi1": self.p1.tolist(), "phi2": self.p2.tolist(), "jump_tol": JUMP_TOL,
@@ -175,11 +199,11 @@ class Data:
             "fields": {k: {"label": label, "scale": scale,
                            "min": float(self.fields[k].min()), "max": float(self.fields[k].max())}
                        for k, (label, scale) in FIELDS.items()},
-            "dataset": dataset.parent.name if density else None,
+            "datasets": self.datasets,
         }
         for k, values in density.items():
             positive = values[values > 0]
-            self.meta["fields"][k] = {"label": DENSITY[k], "scale": "count",
+            self.meta["fields"][k] = {"label": labels[k], "scale": "count",
                                       "min": float(positive.min()) if positive.size else 0.0,
                                       "max": float(values.max())}
 
@@ -427,15 +451,19 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("run", nargs="?", type=Path, default=REPO / "data" / "production",
                     help="run folder or results NPZ (default: data/production)")
-    ap.add_argument("--dataset", type=Path, default=REPO / "data" / "production_nn" / "nn_dataset.npz",
-                    help="training dataset of solver/refine.py, for the density maps (skipped if absent)")
+    ap.add_argument("--dataset", type=Path, action="append",
+                    help="training dataset of solver/refine.py, for the density maps; repeat for several "
+                         "(default: data/production_nn, production_iso and production_shell; absent ones are "
+                         "skipped)")
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--host", default="127.0.0.1", help="0.0.0.0 to serve other machines too")
     ap.add_argument("--allow-remote-runs", action="store_true",
                     help="let the run console start programs although the server is not on localhost")
     args = ap.parse_args()
     results = args.run / "solution_space_results.npz" if args.run.is_dir() else args.run
-    data = Data(results, args.dataset)
+    datasets = args.dataset or [REPO / "data" / name / "nn_dataset.npz"
+                                for name in ("production_nn", "production_iso", "production_shell")]
+    data = Data(results, datasets)
     try:
         allow_runs = args.host in LOOPBACK or args.allow_remote_runs
         server = ThreadingHTTPServer((args.host, args.port),

@@ -43,7 +43,9 @@ def _refine_defaults():
             "seed": 0, "workers": max(1, (os.cpu_count() or 2) - 4), "chunk_points": 5000,
             "seconds_per_solve": 0.011, "split": {"validation": 0.1, "test": 0.1},
             "scheme": "cells", "iso": {"alpha": 1.0, "scale": 1.0, "level_step": 0.05,
-                                       "min_spacing": 0.05, "project_steps": 4}}
+                                       "min_spacing": 0.05, "project_steps": 4},
+            "shell": {"alpha": 1.0, "scale": 1.0, "level_step": 0.05, "min_spacing": 0.05,
+                      "oversample": 12, "project_steps": 4}}
     if REFINE_DEFAULTS.exists():
         with open(REFINE_DEFAULTS) as f:
             for k, v in json.load(f).items():
@@ -151,7 +153,8 @@ def schema():
                 _p("plan_only", "plan only", "bool", False, "branches, then sample --dry-run: counts, "
                    "time and the predicted histogram, no sampling solves", cli=True),
                 _p("scheme", "scheme", "choice", r["scheme"], "cells: Sobol points per grid cell; "
-                   "iso: points on iso-energy surfaces", choices=["cells", "iso"]),
+                   "iso: points on iso-energy surfaces; shell: points through the shells between "
+                   "energy levels", choices=["cells", "iso", "shell"]),
             ]},
             {"title": "Iso-energy surfaces (scheme iso)", "params": [
                 _p("iso.alpha", "alpha", "float", r["iso"]["alpha"], "target rows per unit U: "
@@ -164,6 +167,20 @@ def schema():
                    "closest points on a surface, in grid steps", gt=0, max=10),
                 _p("iso.project_steps", "projections", "int", r["iso"]["project_steps"],
                    "re-solves along grad U onto the level; 0: none", min=0, max=20),
+            ]},
+            {"title": "Energy shells (scheme shell)", "params": [
+                _p("shell.alpha", "alpha", "float", r["shell"]["alpha"], "target rows per unit U: "
+                   "C U^-alpha up to the grid's peak; 1: as many per decade of U", min=0, max=4),
+                _p("shell.scale", "scale", "float", r["shell"]["scale"], "C over its least value, where "
+                   "the power law meets the grid's peak", min=1, max=100),
+                _p("shell.level_step", "bin width", "float", r["shell"]["level_step"],
+                   "relative width of the energy bins", gt=0, max=1),
+                _p("shell.min_spacing", "min spacing", "float", r["shell"]["min_spacing"],
+                   "closest points in a shell, in grid steps", gt=0, max=10),
+                _p("shell.oversample", "oversample", "int", r["shell"]["oversample"],
+                   "random candidates per kept point, before the Poisson-disk selection", min=2, max=100),
+                _p("shell.project_steps", "projections", "int", r["shell"]["project_steps"],
+                   "re-solves along grad U back into the bin; 0: none", min=0, max=20),
             ]},
             {"title": "Points per cell", "params": [
                 _p("density.u_ref", "u_ref", "float", r["density"]["u_ref"], "n = (u_ref / U_min)^power",

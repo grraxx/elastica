@@ -292,8 +292,11 @@ def plan(run, br, cfg, seed):
 # ---------------------------------------------------------------- solve
 
 def _solve_chunk(task):
-    """Solve one chunk: nearest-corner warm start, then projection onto the level."""
-    chunk, part_path, cell, offsets, level, project = task
+    """Solve one chunk: nearest-corner warm start, then, while U is outside the
+    point's window [lo, hi], projection towards its goal energy. The iso scheme's
+    goal is the level and its window the level within project_tol; refine_shell.py
+    passes its bin and the point's planned energy."""
+    chunk, part_path, cell, offsets, level, goal, lo_u, hi_u, project = task
     w = refine._WORKER
     br, beam, amplitude_at = w["br"], w["beam"], w["amplitude"]
     lo = np.array([a[0] for a in br.axes])
@@ -301,11 +304,12 @@ def _solve_chunk(task):
     coords = refine.point_coords(br, cell, offsets)
     m = len(cell)
     out = {k: np.full(m, np.nan) for k in FIELDS}
-    out.update(exists=np.zeros(m, dtype=bool), source=np.full(m, SOURCE_ISO, dtype=np.int8),
+    out.update(exists=np.zeros(m, dtype=bool), source=np.full(m, project["source"], dtype=np.int8),
                warm_start=np.full(m, -1, dtype=np.int64), iterations=np.zeros(m, dtype=np.int16),
-               projections=np.zeros(m, dtype=np.int8), coords=coords.copy(),
+               projections=np.zeros(m, dtype=np.int8), goal=np.array(goal, dtype=float),
+               coords=coords.copy(),
                theta=np.full((m, len(br.beam_x)), np.nan, dtype=np.float32))
-    counts = {"solved": 0, "on level": 0, "dropped": 0}
+    counts = {"solved": 0, project["hit"]: 0, "dropped": 0}
     for row in range(m):
         corners = br.corner_nodes[:, cell[row]]
         distance = np.sum((refine.CORNERS - offsets[row]) ** 2, axis=1)
@@ -322,11 +326,10 @@ def _solve_chunk(task):
         if state is None:
             counts["dropped"] += 1
             continue
-        u_level = project["levels"][level[row]]
         for step in range(project["steps"]):
-            miss = state["energy"] - u_level
-            if abs(miss) <= project["tol"] * u_level:
+            if lo_u[row] <= state["energy"] <= hi_u[row]:
                 break
+            miss = state["energy"] - goal[row]
             grad = np.array([-state["fx"], -state["moment"], state["moment_right"]])
             for _ in range(3):                     # along the box face if the step leaves it
                 if not grad.any():
@@ -346,8 +349,7 @@ def _solve_chunk(task):
                 break
             x, state, amplitude = x_new, trial, amplitude_new
             out["projections"][row] = step + 1
-        on_level = abs(state["energy"] - u_level) <= project["tol"] * u_level
-        counts["on level"] += on_level
+        counts[project["hit"]] += bool(lo_u[row] <= state["energy"] <= hi_u[row])
         for k in FIELDS:
             out[k][row] = state[k]
         out["coords"][row] = x
@@ -407,17 +409,34 @@ def stage_sample(run, dry_run):
         print("Wrote post/energy_histogram_iso_planned.png")
         return
 
+    goal = points["level_values"][level]
+    tol = float(cfg["project_tol"])
+    merged = solve_plan(run, cell, offsets, level, goal, goal * (1 - tol), goal * (1 + tol),
+                        {"steps": int(cfg["project_steps"]), "source": SOURCE_ISO, "hit": "on level"},
+                        workers)
+    for k in ("level_values", "level_edges", "level_target", "level_placed"):
+        merged[k] = points[k]
+    save_npz(run.samples_npz, **merged)
+    miss = np.abs(merged["energy"] / points["level_values"][merged["level"]] - 1)
+    print(f"Wrote {run.samples_npz}: {len(merged['cell']):,} states of {len(cell):,} planned "
+          f"points; {np.count_nonzero(miss <= cfg['project_tol']):,} within "
+          f"{cfg['project_tol']:g} of their level (median |U / U_k - 1| {np.median(miss):.1e}, "
+          f"max {miss.max():.1e})")
+
+
+def solve_plan(run, cell, offsets, level, goal, lo_u, hi_u, project, workers):
+    """Solve planned points on a pool of workers (_solve_chunk), one part file per
+    chunk so that a rerun resumes, and merge the parts."""
     parts_dir = run.parts_dir
     parts_dir.mkdir(exist_ok=True)
     chunk_size = int(run.config.get("chunk_points", 5000))
-    project = {"levels": points["level_values"], "steps": int(cfg["project_steps"]),
-               "tol": float(cfg["project_tol"])}
     tasks = []
     for chunk, start in enumerate(range(0, len(cell), chunk_size)):
         part = parts_dir / f"part_{chunk:05d}.npz"
         if not part.exists():
             rows = slice(start, start + chunk_size)
-            tasks.append((chunk, str(part), cell[rows], offsets[rows], level[rows], project))
+            tasks.append((chunk, str(part), cell[rows], offsets[rows], level[rows], goal[rows],
+                          lo_u[rows], hi_u[rows], project))
     total_chunks = -(-len(cell) // chunk_size)
     print(f"{total_chunks - len(tasks)} of {total_chunks} chunks already done; "
           f"solving {len(tasks)} on {workers} workers")
@@ -436,7 +455,7 @@ def stage_sample(run, dry_run):
                     print(f"  {done}/{len(tasks)} chunks, {elapsed / 60:.1f} min, eta "
                           f"{elapsed / done * (len(tasks) - done) / 60:.1f} min: "
                           + ", ".join(f"{v:,} {k}" for k, v in totals.items()), flush=True)
-            pool.close()
+            pool.close()        # let the workers exit; the with block would kill them
             pool.join()
 
     parts = sorted(parts_dir.glob("part_*.npz"))
@@ -447,20 +466,12 @@ def stage_sample(run, dry_run):
         with np.load(part) as p:
             for k in p.files:
                 merged.setdefault(k, []).append(p[k])
-    merged = {k: np.concatenate(v) for k, v in merged.items()}
-    for k in ("level_values", "level_edges", "level_target", "level_placed"):
-        merged[k] = points[k]
-    save_npz(run.samples_npz, **merged)
-    miss = np.abs(merged["energy"] / points["level_values"][merged["level"]] - 1)
-    print(f"Wrote {run.samples_npz}: {len(merged['cell']):,} states of {len(cell):,} planned "
-          f"points; {np.count_nonzero(miss <= cfg['project_tol']):,} within "
-          f"{cfg['project_tol']:g} of their level (median |U / U_k - 1| {np.median(miss):.1e}, "
-          f"max {miss.max():.1e})")
+    return {k: np.concatenate(v) for k, v in merged.items()}
 
 
 # ---------------------------------------------------------------- figure
 
-def histogram_figure(grid_rows, iso_rows, cfg, path, what):
+def histogram_figure(grid_rows, iso_rows, cfg, path, what, name="iso-energy points"):
     """Rows per unit U on log axes against the target, and the counts on linear bins
     of 0.25 as in postprocess.energy_histogram; the pre-refined grid and the
     iso-energy rows stacked."""
@@ -487,7 +498,7 @@ def histogram_figure(grid_rows, iso_rows, cfg, path, what):
     width = np.diff(edges)
     g = np.histogram(grid_rows, edges)[0] / width
     t = g + np.histogram(iso_rows, edges)[0] / width
-    a1.stairs(t, edges, color=orange, lw=2, label="dataset: grid + iso-energy points")
+    a1.stairs(t, edges, color=orange, lw=2, label=f"dataset: grid + {name}")
     a1.stairs(g, edges, color=blue, lw=2, label="pre-refined grid (both branches)")
     u = np.geomspace(target.u_min, target.u_max, 50)
     a1.plot(u, target.density(u), color=ink, lw=1, ls="--",
@@ -508,7 +519,7 @@ def histogram_figure(grid_rows, iso_rows, cfg, path, what):
     a2.bar(lin[:-1], cg, width=0.25, align="edge", color=blue, edgecolor=surface, lw=0.5,
            label="pre-refined grid")
     a2.bar(lin[:-1], ci, width=0.25, bottom=cg, align="edge", color=orange, edgecolor=surface,
-           lw=0.5, label="iso-energy points")
+           lw=0.5, label=name)
     a2.set_xlim(0, x_max)
     a2.set_xlabel("bending energy U (bin width 0.25)")
     a2.set_ylabel("rows per bin")
@@ -516,7 +527,7 @@ def histogram_figure(grid_rows, iso_rows, cfg, path, what):
     total = cg + ci
     rises = np.flatnonzero(np.diff(total) > 0)
     all_rows = np.concatenate([grid_rows, iso_rows])
-    lines = [f"{len(all_rows):,} rows, {len(iso_rows):,} from iso-energy points"]
+    lines = [f"{len(all_rows):,} rows, {len(iso_rows):,} from {name}"]
     for lo, hi in ((0, 1), (1, 3), (3, 10), (10, np.inf)):
         n = np.count_nonzero((all_rows >= lo) & (all_rows < hi))
         lines.append(f"{lo:g} ≤ U < {hi:g}: {n / len(all_rows):.1%}" if hi < np.inf

@@ -7,10 +7,12 @@ solves inside the grid cells, more of them where the bending energy U is low.
 usage: python refine.py path/to/config.json {branches,sample,export,check} [--dry-run]
        (outputs go next to the config; the source run is only read)
 
-Two sampling schemes, chosen by the config's "scheme": "cells" (the default,
-below) or "iso" (refine_iso.py: regularly spaced points on iso-energy surfaces
-of the grid, following a target energy histogram). Both write the same
-refined_samples.npz, so export and check serve either.
+Three sampling schemes, chosen by the config's "scheme": "cells" (the default,
+below), "iso" (refine_iso.py: regularly spaced points on iso-energy surfaces of
+the grid, following a target energy histogram) or "shell" (refine_shell.py: the
+same target, with the points spread through the shells between consecutive
+energy levels instead of on the levels). All write the same refined_samples.npz,
+so export and check serve any.
 
 Branches are labelled by the sign of p (branch.py): up (p > 0) and down. Two
 maps take solutions to solutions, and the solver's grid is symmetric under both:
@@ -73,7 +75,7 @@ from stability import unstable_directions
 FIELDS = ("fx", "fy", "moment", "moment_right", "energy", "p")
 # Row sources in the dataset.
 SOURCES = {1: "grid", 2: "grid reflected", 3: "extended", 4: "refined", 5: "refined cold start",
-           6: "iso-energy"}
+           6: "iso-energy", 7: "energy shell"}
 # Corner offsets of a grid cell, and the energy bands of the split and the reports.
 CORNERS = np.array([(a, b, c) for a in (0, 1) for b in (0, 1) for c in (0, 1)])
 BANDS = (0.0, 1.0, 3.0, 10.0, np.inf)
@@ -525,6 +527,9 @@ def stage_sample(run, dry_run):
     if run.config.get("scheme", "cells") == "iso":
         import refine_iso
         return refine_iso.stage_sample(run, dry_run)
+    if run.config.get("scheme", "cells") == "shell":
+        import refine_shell
+        return refine_shell.stage_sample(run, dry_run)
     density = {"u_ref": 3.0, "power": 2.0, "max_points": 64, "fold_min_points": 16,
                **run.config.get("density", {})}
     seed = int(run.config.get("seed", 0))
@@ -893,6 +898,9 @@ def stage_check(run):
     if run.config.get("scheme", "cells") == "iso":
         import refine_iso
         failed += refine_iso.check(run, data, have)
+    if run.config.get("scheme", "cells") == "shell":
+        import refine_shell
+        failed += refine_shell.check(run, data, have)
     print("FAILED: " + ", ".join(failed) if failed else "All checks passed")
     return 1 if failed else 0
 

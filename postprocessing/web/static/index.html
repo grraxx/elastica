@@ -11,195 +11,220 @@
 </script>
 </head>
 <body>
-<div class="app">
+<div class="app" id="app" data-tab="explore">
   <header class="topbar">
-    <div>
-      <h1>Elastica solution explorer</h1>
+    <div class="brand">
+      <h1>Elastica explorer</h1>
       <p class="sub" id="runInfo">Loading…</p>
     </div>
+    <nav class="tabs" role="tablist" aria-label="Workspace">
+      <button type="button" role="tab" data-tab="explore" aria-selected="true">Layer map</button>
+      <button type="button" role="tab" data-tab="iso" aria-selected="false">Iso-surfaces</button>
+      <button type="button" role="tab" data-tab="console" aria-selected="false">Run console</button>
+    </nav>
     <div class="actions">
-      <a class="ghost" href="#consoleCard">Run console</a>
+      <button id="helpBtn" class="ghost" type="button" aria-haspopup="dialog" title="Keyboard shortcuts and notes on the data">Shortcuts <kbd>?</kbd></button>
       <button id="themeBtn" class="ghost" type="button" aria-label="Toggle dark mode">Dark mode</button>
     </div>
   </header>
 
-  <div id="banner" class="banner" hidden></div>
+  <div id="banner" class="banner" role="alert" hidden></div>
 
-  <div class="controls" role="toolbar" aria-label="View controls">
-    <div class="control">
-      <span class="label">Field</span>
-      <div class="segmented" id="fieldButtons"></div>
-    </div>
-    <label class="control" id="densityControl" hidden><span class="label">Points</span>
-      <select id="densityKind">
-        <option value="density">all states</option>
-        <option value="density_up">bent-up branch</option>
-        <option value="density_down">bent-down branch</option>
-        <option value="density_grid">before refinement</option>
-        <option value="density_neg">negatives (past a fold)</option>
-      </select></label>
-    <div class="control grow">
-      <span class="label">d layer</span>
-      <button class="icon" id="prevLayer" type="button" aria-label="Previous d layer">‹</button>
-      <input type="range" id="layerSlider" min="0" max="0" step="1" value="0" aria-label="d layer">
-      <button class="icon" id="nextLayer" type="button" aria-label="Next d layer">›</button>
-      <output id="layerValue" class="value">d = –</output>
-    </div>
-    <label class="check"><input type="checkbox" id="showContours"> Contours</label>
-    <label class="check"><input type="checkbox" id="showSnap" checked> Snap edges</label>
-    <label class="check"><input type="checkbox" id="showSmooth"> Smooth crossings</label>
-  </div>
-
-  <main class="grid">
-    <section class="card map-card">
-      <div class="card-head">
-        <h2 id="mapTitle">Layer</h2>
-        <span class="muted" id="mapSub"></span>
-      </div>
-      <div class="map-view" role="toolbar" aria-label="Map view">
-        <div class="segmented" id="viewButtons">
-          <button type="button" data-view="2d" aria-pressed="true">2D map</button>
-          <button type="button" data-view="3d" aria-pressed="false" disabled title="Needs three.js from cdn.jsdelivr.net">3D height</button>
+  <div class="workspace">
+    <!-- ============================================================ controls -->
+    <aside class="sidebar" aria-label="Controls">
+      <section class="panel">
+        <div class="panel-title"><h2>d layer</h2><span class="muted" id="layerIndex"></span></div>
+        <output id="layerValue" class="big-value">d = –</output>
+        <div class="stepper">
+          <button class="icon" id="prevLayer" type="button" aria-label="Previous d layer" title="Previous layer (PgDn or [)">‹</button>
+          <input type="range" id="layerSlider" min="0" max="0" step="1" value="0" aria-label="d layer">
+          <button class="icon" id="nextLayer" type="button" aria-label="Next d layer" title="Next layer (PgUp or ])">›</button>
         </div>
-        <label class="control" id="heightControl" hidden><span class="label">Height</span>
-          <select id="heightField" aria-label="Field on the vertical axis"></select></label>
-        <label class="control" id="heightZsControl" hidden><span class="label">z ×</span>
-          <input type="range" id="heightZs" min="0.1" max="1.5" step="0.05" value="0.5" aria-label="Vertical exaggeration">
-          <output id="heightZsValue" class="value small">0.50</output></label>
-        <button id="heightReset" type="button" class="ghost" hidden>Reset view</button>
-      </div>
-      <div class="map-wrap">
-        <canvas id="map" tabindex="0" aria-label="Heat map of the selected field over phi1 and phi2. Click to probe; arrow keys move the probe."></canvas>
-        <canvas id="map3d" tabindex="0" hidden aria-label="3D height map of the layer over phi1 and phi2. Drag to rotate, right-drag to pan, wheel to zoom; click to probe, arrow keys move the probe."></canvas>
-        <div id="mapLabels" class="iso-labels" aria-hidden="true" hidden></div>
-        <div id="mapTip" class="tooltip" hidden></div>
-      </div>
-      <div class="legend-row">
-        <canvas id="colorbar" aria-hidden="true"></canvas>
-        <div class="legend-keys">
-          <span class="key"><i class="dot ink"></i>Snap edge</span>
-          <span class="key"><i class="dot muted-dot"></i>Smooth crossing</span>
-          <span class="key" id="contourKey" hidden><i class="line-key"></i>Contours: levels marked on the colour bar</span>
-        </div>
-        <span class="muted height-info" id="heightInfo" hidden></span>
-      </div>
-      <p class="hint" id="mapHint3d" hidden>Drag to rotate · right-drag or <kbd>Shift</kbd>+drag to pan · wheel to zoom · click to probe · <kbd>Shift</kbd>+click to pin · arrow keys move the probe · <kbd>PgUp</kbd>/<kbd>PgDn</kbd> change d. Colour is the field above; height is the chosen field on the same scale as its heat map.</p>
-      <p class="hint" id="mapHint">Click to probe · <kbd>Shift</kbd>+click or <kbd>P</kbd> to pin for comparison · arrow keys move the probe · <kbd>PgUp</kbd>/<kbd>PgDn</kbd> change d</p>
-    </section>
+        <div class="range-ends"><span id="dMin"></span><span id="dMax"></span></div>
+      </section>
 
-    <section class="side">
-      <div class="card">
-        <div class="card-head">
-          <h2>Rod shape</h2>
-          <div class="actions">
-            <button id="pinBtn" type="button" class="ghost" disabled>Pin</button>
-            <button id="csvBtn" type="button" class="ghost" disabled>Download θ(s) CSV</button>
+      <div class="for" data-for="explore">
+        <section class="panel">
+          <div class="panel-title"><h2>Colour by</h2><span class="muted">keys 1–7</span></div>
+          <div class="field-list" id="fieldButtons" role="radiogroup" aria-label="Field"></div>
+          <div class="sub-controls" id="densityControl" hidden>
+            <label class="control stacked"><span class="label">Scheme</span>
+              <select id="densityScheme" aria-label="Refinement scheme of the dataset"></select></label>
+            <label class="control stacked"><span class="label">Points</span>
+              <select id="densityKind">
+                <option value="density">all states</option>
+                <option value="density_up">bent-up branch</option>
+                <option value="density_down">bent-down branch</option>
+                <option value="density_grid">before refinement</option>
+                <option value="density_neg">negatives (past a fold)</option>
+              </select></label>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-title"><h2>View</h2><span class="muted">key V</span></div>
+          <div class="segmented full" id="viewButtons">
+            <button type="button" data-view="2d" aria-pressed="true">2D map</button>
+            <button type="button" data-view="3d" aria-pressed="false" disabled title="Needs three.js from cdn.jsdelivr.net">3D height</button>
+          </div>
+          <label class="control stacked" id="heightControl" hidden><span class="label">Height</span>
+            <select id="heightField" aria-label="Field on the vertical axis"></select></label>
+          <label class="control" id="heightZsControl" hidden><span class="label">z ×</span>
+            <input type="range" id="heightZs" min="0.1" max="1.5" step="0.05" value="0.5" aria-label="Vertical exaggeration">
+            <output id="heightZsValue" class="value small">0.50</output></label>
+          <button id="heightReset" type="button" class="ghost" hidden>Reset view</button>
+        </section>
+
+        <section class="panel">
+          <div class="panel-title"><h2>Overlays</h2></div>
+          <label class="check"><input type="checkbox" id="showSnap" checked> <span><i class="dot ink"></i>Snap edges</span></label>
+          <label class="check"><input type="checkbox" id="showSmooth"> <span><i class="dot muted-dot"></i>Smooth crossings</span></label>
+          <label class="check"><input type="checkbox" id="showContours"> <span><i class="line-key"></i>Contours</span></label>
+        </section>
+      </div>
+
+      <div class="for" data-for="iso">
+        <section class="panel">
+          <div class="panel-title"><h2>Surface</h2></div>
+          <div class="segmented full" id="isoFieldButtons" aria-label="Iso-surface field"></div>
+          <input type="range" id="isoSlider" class="wide" min="0" max="1000" step="1" value="500" aria-label="Iso level">
+          <div class="row">
+            <label class="control"><span class="label">Level</span>
+              <input type="number" id="isoLevel" class="num" step="any" aria-label="Iso level value"></label>
+            <button id="isoKeep" type="button" class="ghost" title="Keep this surface and add another">Keep</button>
+          </div>
+          <div class="chips" id="isoPresets" aria-label="Preset levels"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-title"><h2>Shown</h2><span class="muted">click × to remove</span></div>
+          <div class="chips" id="isoKept" aria-label="Surfaces shown"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-title"><h2>Display</h2></div>
+          <label class="control stacked"><span class="label">Colour</span>
+            <select id="isoColor">
+              <option value="d">by d</option>
+              <option value="level">by surface</option>
+              <option value="energy">by U</option>
+              <option value="fx">by fₓ</option>
+              <option value="fy">by fᵧ</option>
+              <option value="moment">by M₁</option>
+              <option value="moment_right">by M₂</option>
+              <option value="q">by q (branch)</option>
+            </select></label>
+          <label class="control stacked"><span class="label">Cut</span>
+            <select id="isoClip">
+              <option value="">none</option>
+              <option value="above">hide d above the layer</option>
+              <option value="below">hide d below the layer</option>
+              <option value="mirror">hide φ₁ + φ₂ &gt; 0 (mirror plane)</option>
+              <option value="phi1">hide φ₁ &gt; 0</option>
+            </select></label>
+          <label class="control stacked"><span class="label">Grid</span>
+            <select id="isoStride">
+              <option value="2">every 2nd φ (fast)</option>
+              <option value="1">full</option>
+            </select></label>
+          <label class="control"><span class="label">d ×</span>
+            <input type="range" id="isoZs" min="2" max="16" step="0.5" value="8" aria-label="Vertical exaggeration of d">
+            <output id="isoZsValue" class="value small">8</output></label>
+          <label class="check"><input type="checkbox" id="isoSnap" checked> <span><i class="dot critical-dot"></i>Snap surface</span></label>
+          <label class="check"><input type="checkbox" id="isoSmooth"> <span>p = 0 smooth part</span></label>
+          <label class="check"><input type="checkbox" id="isoPlane" checked> <span>d layer plane</span></label>
+          <button id="isoReset" type="button" class="ghost">Reset view</button>
+        </section>
+      </div>
+    </aside>
+
+    <!-- ============================================================ stage -->
+    <main class="stage">
+      <section class="pane for" data-for="explore" aria-label="Layer map">
+        <div class="pane-head">
+          <h2 id="mapTitle">Layer</h2>
+          <span class="muted" id="mapSub"></span>
+          <span class="status" id="mapStatus" hidden>Loading…</span>
+        </div>
+        <div class="map-wrap">
+          <canvas id="map" tabindex="0" aria-label="Heat map of the selected field over phi1 and phi2. Click to probe; arrow keys move the probe."></canvas>
+          <canvas id="map3d" tabindex="0" hidden aria-label="3D height map of the layer over phi1 and phi2. Drag to rotate, right-drag to pan, wheel to zoom; click to probe, arrow keys move the probe."></canvas>
+          <div id="mapLabels" class="iso-labels" aria-hidden="true" hidden></div>
+          <div id="mapTip" class="tooltip" hidden></div>
+        </div>
+        <div class="legend-row">
+          <canvas id="colorbar" aria-hidden="true"></canvas>
+          <div class="legend-keys">
+            <span class="key" id="contourKey" hidden><i class="line-key"></i>Contour levels are marked on the bar</span>
+            <span class="muted height-info" id="heightInfo" hidden></span>
           </div>
         </div>
-        <canvas id="rod" class="chart rod"></canvas>
-        <div class="series-legend" id="rodLegend"></div>
-      </div>
+        <p class="hint" id="mapHint">Click to probe · <kbd>Shift</kbd>+click or <kbd>P</kbd> to pin · arrow keys move the probe · <kbd>PgUp</kbd>/<kbd>PgDn</kbd> change d</p>
+        <p class="hint" id="mapHint3d" hidden>Drag to rotate · right-drag to pan · wheel to zoom · click to probe · <kbd>Shift</kbd>+click to pin · height uses the chosen field's colour scale</p>
+      </section>
 
-      <div class="card">
-        <div class="card-head"><h2>Probe values</h2><span class="muted" id="probeWhere">Click the map</span></div>
-        <div class="stats" id="stats"></div>
-      </div>
+      <section class="pane for" data-for="iso" aria-label="Iso-surfaces">
+        <div class="pane-head">
+          <h2>Iso-surfaces in (φ₁, φ₂, d)</h2>
+          <span class="muted" id="isoInfo">Loading the 3D viewer…</span>
+        </div>
+        <div class="iso-wrap" id="isoWrap">
+          <canvas id="iso3d" tabindex="0" aria-label="3D view of iso-surfaces over phi1, phi2 and d. Drag to rotate, right-drag to pan, wheel to zoom; click a surface to probe."></canvas>
+          <div id="isoLabels" class="iso-labels" aria-hidden="true"></div>
+          <div id="isoTip" class="tooltip" hidden></div>
+          <div id="isoStatus" class="iso-status" hidden></div>
+        </div>
+        <div class="legend-row"><canvas id="isoColorbar" aria-hidden="true"></canvas></div>
+        <p class="hint">Drag to rotate · right-drag to pan · wheel to zoom · click a surface to probe · <kbd>Shift</kbd>+click to pin. Level sets stop at the snap surface (red): the fields jump across it.</p>
+      </section>
+    </main>
 
-      <div class="card">
-        <div class="card-head"><h2>Along the rod</h2><span class="muted">EI = L = 1</span></div>
-        <div class="pair">
-          <figure><figcaption>Tangent angle θ(s)</figcaption><canvas id="thetaChart" class="chart small"></canvas></figure>
-          <figure><figcaption>Curvature θ′(s) = bending moment</figcaption><canvas id="kappaChart" class="chart small"></canvas></figure>
+    <!-- ============================================================ inspector -->
+    <aside class="inspector" aria-label="Probe">
+      <div class="inspector-head">
+        <div class="probe-id">
+          <h2><i class="swatch-dot" style="background: var(--s1)"></i>Probe</h2>
+          <span class="muted" id="probeWhere">Click the map</span>
+        </div>
+        <div class="actions">
+          <button id="pinBtn" type="button" class="ghost" disabled title="Pin this point for comparison (P)">Pin</button>
+          <button id="csvBtn" type="button" class="ghost" disabled title="Download θ(s), x, y and curvature as CSV">CSV</button>
         </div>
       </div>
-    </section>
-  </main>
 
-  <section class="card" id="isoCard">
-    <div class="card-head">
-      <h2>Iso-surfaces in (φ₁, φ₂, d)</h2>
-      <span class="muted" id="isoInfo">Loading the 3D viewer…</span>
-    </div>
-    <div class="controls iso-controls" role="toolbar" aria-label="Iso-surface controls">
-      <div class="control">
-        <span class="label">Field</span>
-        <div class="segmented" id="isoFieldButtons"></div>
-      </div>
-      <div class="control grow">
-        <span class="label">Level</span>
-        <input type="range" id="isoSlider" min="0" max="1000" step="1" value="500" aria-label="Iso level">
-        <input type="number" id="isoLevel" class="num" step="any" aria-label="Iso level value">
-        <button id="isoKeep" type="button" class="ghost" title="Keep this surface and add another">Keep</button>
-      </div>
-      <div class="control">
-        <span class="label">Presets</span>
-        <div class="chips" id="isoPresets"></div>
-      </div>
-    </div>
-    <div class="controls iso-controls" role="toolbar" aria-label="Iso-surface display">
-      <label class="control"><span class="label">Colour</span>
-        <select id="isoColor">
-          <option value="d">by d</option>
-          <option value="level">by surface</option>
-          <option value="energy">by U</option>
-          <option value="fx">by fₓ</option>
-          <option value="fy">by fᵧ</option>
-          <option value="moment">by M₁</option>
-          <option value="moment_right">by M₂</option>
-          <option value="q">by q (branch)</option>
-        </select></label>
-      <label class="control"><span class="label">Cut</span>
-        <select id="isoClip">
-          <option value="">none</option>
-          <option value="above">hide d above the layer</option>
-          <option value="below">hide d below the layer</option>
-          <option value="mirror">hide φ₁ + φ₂ &gt; 0 (mirror plane)</option>
-          <option value="phi1">hide φ₁ &gt; 0</option>
-        </select></label>
-      <label class="control"><span class="label">Grid</span>
-        <select id="isoStride">
-          <option value="2">every 2nd φ (fast)</option>
-          <option value="1">full</option>
-        </select></label>
-      <label class="control"><span class="label">d × </span>
-        <input type="range" id="isoZs" min="2" max="16" step="0.5" value="8" aria-label="Vertical exaggeration of d">
-        <output id="isoZsValue" class="value small">8</output></label>
-      <label class="check"><input type="checkbox" id="isoSnap" checked> Snap surface</label>
-      <label class="check"><input type="checkbox" id="isoSmooth"> p = 0 smooth part</label>
-      <label class="check"><input type="checkbox" id="isoPlane" checked> d layer</label>
-      <button id="isoReset" type="button" class="ghost">Reset view</button>
-    </div>
-    <div class="iso-wrap" id="isoWrap">
-      <canvas id="iso3d" tabindex="0" aria-label="3D view of iso-surfaces over phi1, phi2 and d. Drag to rotate, right-drag to pan, wheel to zoom; click a surface to probe."></canvas>
-      <div id="isoLabels" class="iso-labels" aria-hidden="true"></div>
-      <div id="isoTip" class="tooltip" hidden></div>
-      <div id="isoStatus" class="iso-status" hidden></div>
-    </div>
-    <div class="legend-row">
-      <canvas id="isoColorbar" aria-hidden="true"></canvas>
-      <div class="chips" id="isoKept" aria-label="Surfaces shown"></div>
-    </div>
-    <p class="hint">Drag to rotate · right-drag or <kbd>Shift</kbd>+drag to pan · wheel to zoom · hover a surface to read it · click to probe that point (map, rod and profiles follow) · <kbd>Shift</kbd>+click to pin. Level sets stop at the snap surface (red): the fields jump across it.</p>
-  </section>
+      <details class="section" open data-key="values">
+        <summary>Values</summary>
+        <div class="stats" id="stats"></div>
+      </details>
+      <details class="section" open data-key="rod">
+        <summary>Rod shape</summary>
+        <canvas id="rod" class="chart rod"></canvas>
+        <div class="series-legend" id="rodLegend"></div>
+      </details>
+      <details class="section" open data-key="along">
+        <summary>Along the rod <span class="muted">EI = L = 1</span></summary>
+        <figure><figcaption>Tangent angle θ(s)</figcaption><canvas id="thetaChart" class="chart small"></canvas></figure>
+        <figure><figcaption>Curvature θ′(s) = bending moment</figcaption><canvas id="kappaChart" class="chart small"></canvas></figure>
+      </details>
+      <details class="section" open data-key="profiles">
+        <summary>Profiles <span class="muted" id="profileField"></span></summary>
+        <figure><figcaption id="capPhi1">Along φ₁</figcaption><canvas id="profPhi1" class="chart small"></canvas></figure>
+        <figure><figcaption id="capPhi2">Along φ₂</figcaption><canvas id="profPhi2" class="chart small"></canvas></figure>
+        <figure><figcaption id="capD">Along d</figcaption><canvas id="profD" class="chart small"></canvas></figure>
+      </details>
+      <details class="section" open data-key="compare">
+        <summary>Compare points <span class="muted" id="compareCount"></span></summary>
+        <div class="table-wrap">
+          <table id="pointsTable" class="compare"><thead></thead><tbody></tbody></table>
+        </div>
+        <p class="hint" id="compareHint"><kbd>Shift</kbd>+click or <kbd>P</kbd> pins the probe; up to three pins.</p>
+      </details>
+    </aside>
+  </div>
 
-  <section class="card">
-    <div class="card-head"><h2>Profiles through the probe</h2><span class="muted" id="profileField"></span></div>
-    <div class="triple">
-      <figure><figcaption id="capPhi1">Along φ₁</figcaption><canvas id="profPhi1" class="chart small"></canvas></figure>
-      <figure><figcaption id="capPhi2">Along φ₂</figcaption><canvas id="profPhi2" class="chart small"></canvas></figure>
-      <figure><figcaption id="capD">Along d</figcaption><canvas id="profD" class="chart small"></canvas></figure>
-    </div>
-  </section>
-
-  <section class="card">
-    <div class="card-head"><h2>Probed points</h2><span class="muted">The probe and up to three pinned points</span></div>
-    <div class="table-wrap">
-      <table id="pointsTable">
-        <thead><tr><th></th><th>d</th><th>φ₁</th><th>φ₂</th><th>Branch</th><th>U</th><th>f<sub>x</sub></th><th>f<sub>y</sub></th><th>M₁</th><th>M₂</th><th>q</th><th></th></tr></thead>
-        <tbody></tbody>
-      </table>
-    </div>
-  </section>
+  <!-- ============================================================ run console -->
+  <div class="console-page for" data-for="console">
   <section class="card" id="consoleCard">
     <div class="card-head">
       <h2>Run console</h2>
@@ -239,9 +264,34 @@
       </div>
     </div>
   </section>
-
-  <footer class="muted">Data: the solver's results NPZ; the density maps count the points of the training dataset (solver/refine.py) around each node, per 0.01-cube. Forces are the end reactions (Lagrange multipliers); f<sub>x</sub> &gt; 0 is compression. Snap: p changes sign with a jump (|Δq| &gt; <span id="jumpTol">0.17</span>).</footer>
+  </div>
 </div>
+
+<dialog id="helpDialog" aria-labelledby="helpTitle">
+  <div class="dialog-head">
+    <h2 id="helpTitle">Keyboard shortcuts</h2>
+    <button type="button" class="icon" id="helpClose" aria-label="Close">×</button>
+  </div>
+  <table class="keys">
+    <tbody>
+      <tr><td><kbd>1</kbd>–<kbd>7</kbd></td><td>Colour the map by q, U, fₓ, fᵧ, M₁, M₂, data density</td></tr>
+      <tr><td><kbd>PgUp</kbd> <kbd>PgDn</kbd> or <kbd>]</kbd> <kbd>[</kbd></td><td>Next / previous d layer</td></tr>
+      <tr><td>Arrow keys</td><td>Move the probe one node (map focused)</td></tr>
+      <tr><td><kbd>P</kbd> or <kbd>Shift</kbd>+click</td><td>Pin the probe for comparison (up to three)</td></tr>
+      <tr><td><kbd>V</kbd></td><td>Switch the map between 2D and 3D height</td></tr>
+      <tr><td><kbd>C</kbd></td><td>Contours on / off</td></tr>
+      <tr><td><kbd>M</kbd> <kbd>I</kbd> <kbd>R</kbd></td><td>Layer map, iso-surfaces, run console</td></tr>
+      <tr><td><kbd>?</kbd></td><td>This help; <kbd>Esc</kbd> closes it</td></tr>
+    </tbody>
+  </table>
+  <h2>About the data</h2>
+  <p class="about-data">The solver's results NPZ. The density maps count the points of the training datasets around each
+    node, per 0.01-cube: the cells scheme (solver/refine.py), the iso-energy scheme (solver/refine_iso.py), and the
+    energy-shell scheme (solver/refine_shell.py), on one colour scale. Forces are the end reactions (Lagrange
+    multipliers); f<sub>x</sub> &gt; 0 is compression. Snap: p changes sign with a jump (|Δq| &gt; <span id="jumpTol">0.17</span>).
+    The page link keeps the layer, field, probe and view, so it can be bookmarked.</p>
+</dialog>
+
 <script src="app.js"></script>
 <script src="console.js"></script>
 <script type="module" src="heightmap.js"></script>

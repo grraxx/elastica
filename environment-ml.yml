@@ -1,0 +1,14 @@
+# Environment for the neural-network surrogate (surrogate/, presentation/scripts/make_surrogate.py),
+# kept apart from elastica-env so PyTorch's CUDA libraries never touch the FEniCSx stack.
+#   conda env create -f environment-ml.yml        # creates "elastica-ml"
+name: elastica-ml
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - numpy=2.5
+  - matplotlib=3.11
+  - pip
+  - pip:
+      - --extra-index-url https://download.pytorch.org/whl/cu128
+      - torch==2.11.0

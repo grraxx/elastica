@@ -14,15 +14,31 @@ const S = {
   column: null,         // field along d at the probe
   hover: null,
   pendingProbe: null,   // {j, k, pin}: probe once the layer has loaded (from the 3D view)
+  tab: "explore",       // the workspace: "explore" (layer map), "iso" (iso-surfaces) or "console"
   view: "2d",           // the layer as a heat map ("2d") or a height map ("3d", heightmap.js)
   heightField: "",      // the height map's vertical field; "" follows the colour field
 };
 const MAX_PINS = 3;
+const TABS = ["explore", "iso", "console"];
 const FIELD_ORDER = ["q", "energy", "fx", "fy", "moment", "moment_right", "density"];
 const SHORT = { q: "q (branch)", energy: "Energy U", fx: "fₓ", fy: "fᵧ", moment: "M₁", moment_right: "M₂",
                 density: "Data density", density_up: "States, bent up", density_down: "States, bent down",
                 density_grid: "States before refinement", density_neg: "Negatives" };
+const NAME = { q: "q, branch", energy: "Energy U", fx: "Axial force fₓ", fy: "Transverse force fᵧ", moment: "Moment M₁",
+               moment_right: "Moment M₂", density: "Data density" };
+const DESC = { q: "p / a(d): red bent up, blue bent down", energy: "½∫θ′² ds, log scale", fx: "> 0 compression",
+               fy: "end reaction", moment: "θ′(0), left clamp", moment_right: "θ′(L), right clamp",
+               density: "training points per grid box" };
 const isDensity = (field) => field.startsWith("density");
+const DENSITY_KINDS = ["density", "density_up", "density_down", "density_grid", "density_neg"];
+// A density field is a kind plus its dataset's suffix: "" for the cells scheme, "_iso" or "_shell" for the others.
+function splitDensity(field) {
+  for (const ds of [...S.meta.datasets].sort((a, b) => b.suffix.length - a.suffix.length)) {
+    const kind = field.slice(0, field.length - ds.suffix.length);
+    if (field.endsWith(ds.suffix) && DENSITY_KINDS.includes(kind)) return { kind, suffix: ds.suffix };
+  }
+  return { kind: field, suffix: "" };
+}
 const PI_TICKS = [[-Math.PI / 2, "−π/2"], [-Math.PI / 4, "−π/4"], [0, "0"], [Math.PI / 4, "π/4"], [Math.PI / 2, "π/2"]];
 const $ = (id) => document.getElementById(id);
 const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -98,13 +114,15 @@ function makeNorm(field, values) {
     return { lut: lut([css("--seq-lo"), css("--seq-mid"), css("--seq-hi")]), f: (v) => (Math.log10(Math.max(v, 1e-12)) - a) / (b - a || 1),
              ticks, lo, hi, caption: `${S.meta.fields[field].label}   ·   log scale, this layer` };
   }
-  if (kind === "count") {
-    const { min, max } = S.meta.fields[field], a = Math.log10(Math.max(min, 1)), b = Math.log10(Math.max(max, 2));
+  if (kind === "count") {                     // one scale for every scheme, so their maps compare
+    const same = S.meta.datasets.map((ds) => S.meta.fields[splitDensity(field).kind + ds.suffix]).filter(Boolean);
+    const min = Math.min(...same.map((f) => f.min).filter((v) => v > 0), Infinity), max = Math.max(...same.map((f) => f.max));
+    const a = Math.log10(Number.isFinite(min) ? Math.max(min, 1) : 1), b = Math.log10(Math.max(max, 2));
     const ticks = [];
     for (let e = 0; 10 ** e <= max; e++) for (const m of [1, 2, 5]) { const v = m * 10 ** e; if (v >= min && v <= max) ticks.push(v); }
     return { lut: lut([css("--seq-lo"), css("--seq-mid"), css("--seq-hi")]), f: (v) => (Math.log10(Math.max(v, 1)) - a) / (b - a),
              ticks, lo: min, hi: max, empty: hexToRgb(css("--div-mid")),
-             caption: `Points per 0.01-cube around the node   ·   log scale, all layers   ·   grey: none` };
+             caption: `Points per 0.01-cube   ·   log scale, all layers${same.length > 1 ? ", all schemes" : ""}   ·   grey: none` };
   }
   const c = Math.max(1, amax / 1000), g = (v) => Math.sign(v) * Math.log10(1 + Math.abs(v) / c), G = g(amax) || 1;
   const ticks = [0];
@@ -184,14 +202,15 @@ function buildContours() {
 }
 
 // ------------------------------------------------------------------ the map
-const MAP_PAD = { l: 46, r: 10, t: 8, b: 36 };
+const MAP_PAD = { l: 58, r: 10, t: 8, b: 36 };
 function mapGeometry(w, h) {
-  const size = Math.min(w - MAP_PAD.l - MAP_PAD.r, h - MAP_PAD.t - MAP_PAD.b);
+  const aw = w - MAP_PAD.l - MAP_PAD.r, ah = h - MAP_PAD.t - MAP_PAD.b, size = Math.max(10, Math.min(aw, ah));
+  const x0 = MAP_PAD.l + Math.max(0, (aw - size) / 2), y0 = MAP_PAD.t + Math.max(0, (ah - size) / 2);   // centred
   const p1 = S.meta.phi1, p2 = S.meta.phi2;
   return {
-    x0: MAP_PAD.l, y0: MAP_PAD.t, size,
-    X: (v) => MAP_PAD.l + ((v - p1[0]) / (p1[p1.length - 1] - p1[0])) * size,
-    Y: (v) => MAP_PAD.t + size - ((v - p2[0]) / (p2[p2.length - 1] - p2[0])) * size,
+    x0, y0, size,
+    X: (v) => x0 + ((v - p1[0]) / (p1[p1.length - 1] - p1[0])) * size,
+    Y: (v) => y0 + size - ((v - p2[0]) / (p2[p2.length - 1] - p2[0])) * size,
   };
 }
 function drawMap() {
@@ -213,7 +232,7 @@ function drawMap() {
   for (const [v, label] of PI_TICKS) { const y = g.Y(v); ctx.fillRect(g.x0 - 4, y, 4, 1); ctx.fillText(label, g.x0 - 7, y); }
   ctx.fillStyle = css("--ink-2"); ctx.font = "12px system-ui, sans-serif"; ctx.textAlign = "center";
   ctx.fillText("φ₁", g.x0 + g.size / 2, g.y0 + g.size + 22);
-  ctx.save(); ctx.translate(12, g.y0 + g.size / 2); ctx.rotate(-Math.PI / 2); ctx.fillText("φ₂", 0, 0); ctx.restore();
+  ctx.save(); ctx.translate(g.x0 - 48, g.y0 + g.size / 2); ctx.rotate(-Math.PI / 2); ctx.fillText("φ₂", 0, 0); ctx.restore();
   if ($("showContours").checked && !isDensity(S.field)) {
     if (!S.contours) buildContours();
     const kind = S.meta.fields[S.field].scale;
@@ -459,7 +478,8 @@ function rodLegend() {
 function renderStats() {
   const box = $("stats"); box.replaceChildren();
   const p = S.probe;
-  $("probeWhere").textContent = p ? `d = ${p.d.toFixed(2)}, φ = (${fmtPhi(p.phi1)}, ${fmtPhi(p.phi2)}) · node ${p.node.toLocaleString("en-US")}${p.waited ? " · was deferred" : ""}` : "Click the map";
+  $("probeWhere").textContent = p ? `d ${p.d.toFixed(2)} · φ₁ ${fmtPhi(p.phi1)} · φ₂ ${fmtPhi(p.phi2)} · ${branchName(p.p)} · node ${p.node.toLocaleString("en-US")}${p.waited ? " · was deferred" : ""}`
+                                  : "Click the map or a surface to probe a point";
   const tiles = p ? [
     ["Branch", branchName(p.p), `p = ${fmt(p.p)}`],
     ["Energy U", fmt(p.energy), "½∫θ′² ds"],
@@ -509,26 +529,44 @@ function renderProfiles() {
   if (S.column) lineChart($("profD"), { series: [{ x: S.meta.d, y: S.column, color, name: label }], xName: "d", xFormat: (v) => v.toFixed(2),
                                         markers: [{ x: p.d, y: value, color }] });
 }
+// Points as columns, quantities as rows: reads down a narrow panel and compares across.
+const COMPARE_ROWS = [["d", (r) => r.d.toFixed(2)], ["φ₁", (r) => fmtPhi(r.phi1)], ["φ₂", (r) => fmtPhi(r.phi2)],
+  ["Branch", (r) => branchName(r.p)], ["U", (r) => fmt(r.energy)], ["fₓ", (r) => fmt(r.fx)], ["fᵧ", (r) => fmt(r.fy)],
+  ["M₁", (r) => fmt(r.moment)], ["M₂", (r) => fmt(r.moment_right)], ["q", (r) => fmt(r.q, 3)]];
 function renderTable() {
-  const body = $("pointsTable").querySelector("tbody"); body.replaceChildren();
-  const rows = [...(S.probe ? [S.probe] : []), ...S.pins];
-  for (const r of rows) {
-    const tr = document.createElement("tr");
-    const key = document.createElement("td"); const sw = document.createElement("span"); sw.className = "swatch"; sw.style.background = slotColor(r.slot);
-    key.append(sw, document.createTextNode(r === S.probe ? " Probe" : " Pin")); tr.appendChild(key);
-    for (const v of [r.d.toFixed(2), fmtPhi(r.phi1), fmtPhi(r.phi2), branchName(r.p), fmt(r.energy), fmt(r.fx), fmt(r.fy), fmt(r.moment), fmt(r.moment_right), fmt(r.q, 3)]) {
-      const td = document.createElement("td"); td.textContent = v; tr.appendChild(td);
-    }
-    const act = document.createElement("td");
+  const table = $("pointsTable"), head = table.querySelector("thead"), body = table.querySelector("tbody");
+  head.replaceChildren(); body.replaceChildren();
+  const cols = [...(S.probe ? [S.probe] : []), ...S.pins];
+  $("compareCount").textContent = S.pins.length ? `${S.pins.length} of ${MAX_PINS} pinned` : "";
+  $("compareHint").hidden = S.pins.length >= MAX_PINS;
+  if (!cols.length) return;
+  const cell = (tag, text) => { const c = document.createElement(tag); if (text !== undefined) c.textContent = text; return c; };
+  const hr = document.createElement("tr"); hr.appendChild(cell("th"));
+  cols.forEach((r, n) => {
+    const th = cell("th"), sw = document.createElement("span"); sw.className = "swatch"; sw.style.background = slotColor(r.slot);
+    th.append(sw, r === S.probe ? "Probe" : `Pin ${n}`); hr.appendChild(th);
+  });
+  head.appendChild(hr);
+  for (const [name, get] of COMPARE_ROWS) {
+    const tr = document.createElement("tr"); tr.appendChild(cell("td", name));
+    for (const r of cols) tr.appendChild(cell("td", get(r)));
+    body.appendChild(tr);
+  }
+  if (!S.pins.length) return;
+  const tr = document.createElement("tr"); tr.appendChild(cell("td"));
+  for (const r of cols) {
+    const td = cell("td");
     if (r !== S.probe) {
       const b = document.createElement("button"); b.type = "button"; b.textContent = "Remove"; b.setAttribute("aria-label", "Remove pinned point");
       b.addEventListener("click", () => { S.pins = S.pins.filter((x) => x !== r); renderAll(); });
-      act.appendChild(b);
+      td.appendChild(b);
     }
-    tr.appendChild(act); body.appendChild(tr);
+    tr.appendChild(td);
   }
+  body.appendChild(tr);
 }
 function renderAll() {
+  contourAvailability();
   drawMap(); drawColorbar(); drawRod(); rodLegend(); renderStats(); renderRodCharts(); renderProfiles(); renderTable(); writeHash();
   if (window.viewer3d) window.viewer3d.sync();
   if (window.heightmap) window.heightmap.update();
@@ -537,7 +575,7 @@ function renderAll() {
 // ------------------------------------------------------------------ data flow
 async function loadLayer() {
   const i = S.i, field = S.field;
-  $("map").style.opacity = 0.6;
+  $("map").style.opacity = 0.6; $("mapStatus").hidden = false;
   try {
     const [buf, qbuf, snap] = await Promise.all([
       fetch(`/api/layer?i=${i}&field=${field}`).then((r) => { if (!r.ok) throw new Error(`layer ${r.status}`); return r.arrayBuffer(); }),
@@ -549,13 +587,13 @@ async function loadLayer() {
     buildImage();
     let up = 0; for (const v of S.qLayer) if (v > 0) up++;
     $("mapTitle").textContent = `${S.meta.fields[S.field].label}`;
-    $("mapSub").textContent = `d = ${S.meta.d[i].toFixed(2)} · layer ${i + 1} of ${S.meta.d.length} · bent up ${Math.round((100 * up) / S.qLayer.length)} %`;
-    $("layerValue").textContent = `d = ${S.meta.d[i].toFixed(2)}`;
+    $("mapSub").textContent = `d = ${S.meta.d[i].toFixed(2)} · bent up on ${Math.round((100 * up) / S.qLayer.length)} % of the layer`;
+    showLayer();
     showBanner("");
   } catch (err) {
     showBanner(`Could not load the layer: ${err.message}. Is the server still running?`);
   } finally {
-    $("map").style.opacity = 1;
+    $("map").style.opacity = 1; $("mapStatus").hidden = true;
   }
   const pending = S.pendingProbe; S.pendingProbe = null;
   if (pending) await probe(pending.j, pending.k, pending.pin);
@@ -589,8 +627,12 @@ function pin() {
 function setLayer(i) {
   i = Math.max(0, Math.min(S.meta.d.length - 1, i));
   if (i === S.i && S.layer) return;
-  S.i = i; $("layerSlider").value = i; $("layerValue").textContent = `d = ${S.meta.d[i].toFixed(2)}`;
+  S.i = i; $("layerSlider").value = i; showLayer();
   loadLayer();
+}
+function showLayer() {
+  $("layerValue").textContent = `d = ${S.meta.d[S.i].toFixed(2)}`;
+  $("layerIndex").textContent = `layer ${S.i + 1} of ${S.meta.d.length}`;
 }
 function goTo(i, j, k, pinAfter) {          // probe a node on any layer (the 3D view)
   if (i === S.i && S.layer) return probe(j, k, pinAfter);
@@ -598,11 +640,11 @@ function goTo(i, j, k, pinAfter) {          // probe a node on any layer (the 3D
   setLayer(i);
 }
 async function setField(field) {
-  if (field === "density") field = $("densityKind").value;
+  if (field === "density") field = $("densityKind").value + $("densityScheme").value;
   S.field = field;
-  for (const b of $("fieldButtons").children) b.setAttribute("aria-pressed", b.dataset.field === field || (b.dataset.field === "density" && isDensity(field)));
+  for (const b of $("fieldButtons").children) b.setAttribute("aria-checked", b.dataset.field === field || (b.dataset.field === "density" && isDensity(field)));
   $("densityControl").hidden = !isDensity(field);
-  if (isDensity(field)) $("densityKind").value = field;
+  if (isDensity(field)) showDensityChoice(field);
   contourAvailability();
   if (S.probe) S.column = await getJSON(`/api/column?j=${S.probe.j}&k=${S.probe.k}&field=${field}`).catch(() => null);
   loadLayer();
@@ -613,6 +655,7 @@ function writeHash() {
   const parts = [`d=${S.meta.d[S.i].toFixed(2)}`, `field=${S.field}`];
   if (S.probe) parts.push(`phi1=${S.probe.phi1.toFixed(4)}`, `phi2=${S.probe.phi2.toFixed(4)}`);
   if (S.view === "3d") parts.push("view=3d", ...(S.heightField ? [`height=${S.heightField}`] : []));
+  if (S.tab !== "explore") parts.push(`tab=${S.tab}`);
   history.replaceState(null, "", `#${parts.join("&")}`);
 }
 function readHash() {
@@ -621,6 +664,7 @@ function readHash() {
   if (h.has("d")) out.i = nearest(S.meta.d, +h.get("d"));
   if (h.has("field") && (FIELD_ORDER.includes(h.get("field")) || isDensity(h.get("field"))) && S.meta.fields[h.get("field")]) out.field = h.get("field");
   if (h.get("view") === "3d") out.view = "3d";
+  if (TABS.includes(h.get("tab"))) out.tab = h.get("tab");
   if (h.has("height") && S.meta.fields[h.get("height")] && SHORT[h.get("height")]) out.height = h.get("height");
   if (h.has("phi1") && h.has("phi2")) out.jk = [nearest(S.meta.phi1, +h.get("phi1")), nearest(S.meta.phi2, +h.get("phi2"))];
   return out;
@@ -628,17 +672,38 @@ function readHash() {
 
 // ------------------------------------------------------------------ events
 function wire() {
-  for (const f of FIELD_ORDER) {
-    if (!S.meta.fields[f]) continue;               // no training dataset: no density maps
-    const b = document.createElement("button"); b.type = "button"; b.dataset.field = f; b.textContent = SHORT[f];
-    b.title = f === "density" ? "Points of the training dataset around each node" : S.meta.fields[f].label;
-    b.setAttribute("aria-pressed", f === S.field || (f === "density" && isDensity(S.field)));
-    b.addEventListener("click", () => setField(f)); $("fieldButtons").appendChild(b);
+  for (const ds of S.meta.datasets) {          // the density maps' schemes
+    const o = document.createElement("option"); o.value = ds.suffix; o.textContent = `${ds.label} (${ds.name})`;
+    $("densityScheme").appendChild(o);
   }
+  $("densityScheme").parentElement.hidden = S.meta.datasets.length < 2;
+  FIELD_ORDER.forEach((f, n) => {
+    if (f === "density" ? !S.meta.datasets.length : !S.meta.fields[f]) return;      // no training dataset: no density maps
+    const b = document.createElement("button"); b.type = "button"; b.dataset.field = f; b.setAttribute("role", "radio");
+    const name = document.createElement("span"); name.className = "name"; name.textContent = NAME[f];
+    const desc = document.createElement("span"); desc.className = "desc"; desc.textContent = DESC[f];
+    const key = document.createElement("kbd"); key.textContent = String(n + 1);
+    b.append(name, key, desc);
+    b.title = f === "density" ? "Points of the training datasets around each node" : S.meta.fields[f].label;
+    b.setAttribute("aria-checked", f === S.field || (f === "density" && isDensity(S.field)));
+    b.addEventListener("click", () => setField(f)); $("fieldButtons").appendChild(b);
+  });
   $("densityControl").hidden = !isDensity(S.field);
-  if (isDensity(S.field)) $("densityKind").value = S.field;
-  $("densityKind").addEventListener("change", (e) => setField(e.target.value));
+  if (isDensity(S.field)) showDensityChoice(S.field);
+  for (const id of ["densityKind", "densityScheme"]) $(id).addEventListener("change", () => setField("density"));
   $("layerSlider").max = S.meta.d.length - 1;
+  $("dMin").textContent = S.meta.d[0].toFixed(2); $("dMax").textContent = S.meta.d.at(-1).toFixed(2);
+  for (const b of document.querySelectorAll(".tabs [data-tab]")) b.addEventListener("click", () => setTab(b.dataset.tab));
+  $("helpBtn").addEventListener("click", () => $("helpDialog").showModal());
+  $("helpClose").addEventListener("click", () => $("helpDialog").close());
+  $("helpDialog").addEventListener("click", (e) => { if (e.target === $("helpDialog")) $("helpDialog").close(); });   // backdrop
+  for (const d of document.querySelectorAll("details.section")) {    // remember which sections are open
+    try { const v = localStorage.getItem(`section:${d.dataset.key}`); if (v) d.open = v === "open"; } catch (_) { /* storage unavailable */ }
+    d.addEventListener("toggle", () => {
+      try { localStorage.setItem(`section:${d.dataset.key}`, d.open ? "open" : "closed"); } catch (_) { /* storage unavailable */ }
+      renderAll();
+    });
+  }
   $("layerSlider").addEventListener("input", (e) => setLayer(+e.target.value));
   $("prevLayer").addEventListener("click", () => setLayer(S.i - 1));
   $("nextLayer").addEventListener("click", () => setLayer(S.i + 1));
@@ -671,10 +736,23 @@ function wire() {
     }
   });
   document.addEventListener("keydown", (e) => {
-    if (e.target.tagName === "INPUT" && e.target.type !== "checkbox") return;   // the slider has its own keys
-    if (e.key === "PageUp" || e.key === "]") { e.preventDefault(); setLayer(S.i + 1); }
-    else if (e.key === "PageDown" || e.key === "[") { e.preventDefault(); setLayer(S.i - 1); }
-    else if (e.key === "p" || e.key === "P") { pin(); renderAll(); }
+    const t = e.target;
+    if ((t.tagName === "INPUT" && t.type !== "checkbox") || t.tagName === "SELECT" || t.tagName === "TEXTAREA") return;
+    if (e.ctrlKey || e.metaKey || e.altKey || $("helpDialog").open) return;
+    const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    if (key === "?") { e.preventDefault(); $("helpDialog").showModal(); return; }
+    if (key === "m" || key === "i" || key === "r") { setTab({ m: "explore", i: "iso", r: "console" }[key]); return; }
+    if (S.tab === "console") return;                                   // the rest act on the explorer
+    if (key === "PageUp" || key === "]") { e.preventDefault(); setLayer(S.i + 1); }
+    else if (key === "PageDown" || key === "[") { e.preventDefault(); setLayer(S.i - 1); }
+    else if (key === "p") { pin(); renderAll(); }
+    else if (key >= "1" && key <= "7") {
+      const b = $("fieldButtons").querySelector(`[data-field="${FIELD_ORDER[+key - 1]}"]`);
+      if (b) b.click();
+    } else if (key === "v" && S.tab === "explore") {
+      const b = $("viewButtons").querySelector(`[data-view="${S.view === "3d" ? "2d" : "3d"}"]`);
+      if (b && !b.disabled) b.click();
+    } else if (key === "c" && !$("showContours").disabled) { $("showContours").click(); }
   });
   $("pinBtn").addEventListener("click", () => { pin(); renderAll(); });
   $("csvBtn").addEventListener("click", () => {
@@ -696,12 +774,26 @@ function wire() {
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change", themeChanged);
   for (const id of ["thetaChart", "kappaChart", "profPhi1", "profPhi2", "profD"]) attachCrosshair($(id));
   attachRodHover();
-  new ResizeObserver(() => renderAll()).observe(document.querySelector(".app"));
+  const resized = new ResizeObserver(() => renderAll());
+  for (const sel of [".stage", ".inspector", ".map-wrap"]) resized.observe(document.querySelector(sel));
 }
-function contourAvailability() {           // point counts are speckle: no contours for them
-  const box = $("showContours"), off = isDensity(S.field);
+function setTab(tab) {
+  S.tab = tab;
+  $("app").dataset.tab = tab;
+  for (const b of document.querySelectorAll(".tabs [data-tab]")) b.setAttribute("aria-selected", b.dataset.tab === tab);
+  $("mapTip").hidden = true;
+  renderAll();                                // canvases size themselves from their now visible boxes
+  if (tab === "iso" && window.viewer3d) window.viewer3d.theme();   // redraws its colour bar too
+}
+function showDensityChoice(field) {
+  const { kind, suffix } = splitDensity(field);
+  $("densityKind").value = kind; $("densityScheme").value = suffix;
+}
+function contourAvailability() {           // point counts are speckle, and the 3D view has none: no contours there
+  const box = $("showContours"), off = isDensity(S.field) || S.view === "3d";
   box.disabled = off;
-  box.parentElement.title = off ? "No contours for the point counts of the density maps" : "Contour lines of the field on this layer";
+  box.parentElement.title = isDensity(S.field) ? "No contours for the point counts of the density maps"
+    : S.view === "3d" ? "Contours are drawn on the 2D map" : "Contour lines of the field on this layer (C)";
   $("contourKey").hidden = off || !box.checked;
 }
 function themeChanged() {
@@ -723,19 +815,28 @@ async function init() {
   }
   const n = S.meta.shape.reduce((a, b) => a * b, 1);
   $("runInfo").textContent = `Run “${S.meta.run}” · ${n.toLocaleString("en-US")} equilibria · d ${S.meta.d[0].toFixed(2)}–${S.meta.d[S.meta.d.length - 1].toFixed(2)} · φ ±π/2`
-    + (S.meta.dataset ? ` · density maps from “${S.meta.dataset}”` : "");
+    + (S.meta.datasets.length ? ` · density maps from ${S.meta.datasets.map((ds) => `“${ds.name}” (${ds.scheme})`).join(" and ")}` : "");
+  if (S.meta.datasets.length > 1) for (const k of DENSITY_KINDS) {          // name the scheme when there are several
+    const base = SHORT[k];
+    for (const ds of S.meta.datasets) SHORT[k + ds.suffix] = `${base}, ${ds.scheme}`;
+  }
+  $("runInfo").title = $("runInfo").textContent;
   $("jumpTol").textContent = S.meta.jump_tol;
   const h = readHash();
   if (h.field) S.field = h.field;
   if (h.i !== undefined) S.i = h.i;
   if (h.view) S.view = h.view;
   if (h.height) S.heightField = h.height;
+  if (h.tab) { S.tab = h.tab; $("app").dataset.tab = h.tab; }
   wire();                                   // sets the slider's max first
+  for (const b of document.querySelectorAll(".tabs [data-tab]")) b.setAttribute("aria-selected", b.dataset.tab === S.tab);
   $("layerSlider").value = S.i;
+  showLayer();
   themeChanged();
   if (window.viewer3d) window.viewer3d.init();
   if (window.heightmap) window.heightmap.init();
   await loadLayer();
-  if (h.jk) await probe(h.jk[0], h.jk[1], false);
+  const [, n1, n2] = S.meta.shape;              // no probe in the link: start at the centre, so no panel is empty
+  await probe(...(h.jk || [(n1 - 1) >> 1, (n2 - 1) >> 1]), false);
 }
 init();

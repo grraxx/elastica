@@ -15,13 +15,19 @@ flips with a jump.
 .
 ├── solver/                    the continuation solver, its config and the result checks
 ├── postprocessing/            postprocess.py (ParaView VTU, surfaces, figures); web/ (solution explorer)
+├── surrogate/                 train_mlp.py (MLP surrogate of both branches: training, predict); plot_mlp.py
 ├── presentation/
 │   ├── elastica_snap_surface.pptx
-│   ├── figures/               the deck's plots, written by scripts/make_figures.py
-│   └── scripts/               make_figures.py; make_bistable.py (bistable region, animation)
+│   ├── elastica.pdf           its LibreOffice export
+│   ├── figures/               the deck's plots, written by scripts/; equations/ (rendered equation fallbacks)
+│   └── scripts/               make_figures.py; make_bistable.py (bistable region, animation);
+│                              make_refinement{,_iso,_shell}.py (sampling schemes); make_surrogate.py,
+│                              make_surrogate_equations.py (surrogate section)
 ├── notebooks/                 single_point_solve.ipynb: one solve, step by step
-├── data/production/           the production run (not in git, see data/README.md)
-└── environment.yml            conda environment (FEniCSx 0.11, PETSc, PyVista, ParaView)
+├── data/                      runs and datasets, not in git: production/, production_{nn,iso,shell}/
+│                              (training data, trained surrogates); see data/README.md
+├── environment.yml            conda environment (FEniCSx 0.11, PETSc, PyVista, ParaView)
+└── environment-ml.yml         conda environment for the surrogate (PyTorch 2.11, CUDA 12.8)
 ```
 
 ## Quick start
@@ -144,6 +150,7 @@ Files:
 | `validate_results.py` | checks a checkpoint or result against independent references |
 | `refine.py` | training data for a neural surrogate: both branches, low-energy refinement |
 | `refine_iso.py` | refine.py's second sampling scheme: points on iso-energy surfaces |
+| `refine_shell.py` | refine.py's third sampling scheme: points through the shells between energy levels |
 
 `validate_results.py` checks:
 - coverage, and that mirror pairs agree;
@@ -180,25 +187,35 @@ The default box is the production one: d 0.70–0.99 and φ ±π/2, step 0.01, s
 
 ```bash
 python postprocessing/web/server.py            # data/production by default; another run: give its folder
-                                               # --dataset other/nn_dataset.npz for other density maps
+                                               # --dataset other/nn_dataset.npz (repeatable) for other density maps
 ```
 
 Open http://localhost:8765. From Windows this works too, because WSL forwards localhost, as long as
 no Windows program already uses the port. If the page says "not found", start the server with
 another port, for example `--port 8790`.
+- **Layout:** three workspaces in tabs: Layer map, Iso-surfaces and Run console. The first two
+  share a control sidebar (the d layer on top, then the controls of that view) and the probe
+  inspector on the right, so a point picked in either view stays in front of you. The page opens
+  probing the centre of the layer; the inspector's sections fold and remember it. Below 1280 px
+  wide the inspector moves under the map and the page scrolls.
 - **Map:** one d layer coloured by q (branch), energy, f_x, f_y, M₁ or M₂, with the snap edges
   marked. Hover to read values.
-- **Data density:** points of the training dataset (`data/production_nn/nn_dataset.npz`, from
-  `refine.py`) per 0.01-cube around each node: all states, either branch, the grid alone (before
-  refinement) or the negatives. One log colour scale for all layers; grey boxes hold none. Each
-  point counts at its nearest node; boxes cut by the edge of the domain are scaled to a whole one.
-  The first start counts them (a few seconds) into `nn_dataset.density.npz`. Without the dataset
-  the button is hidden.
+- **Data density:** points of the training datasets per 0.01-cube around each node, for the three
+  refinement schemes: cells (`data/production_nn/nn_dataset.npz`), iso-energy
+  (`data/production_iso/nn_dataset.npz`) and energy shells (`data/production_shell/nn_dataset.npz`),
+  picked with the Scheme selector (the scheme comes from
+  the `config.json` beside each dataset). Points: all states, either branch, the grid alone
+  (before refinement) or the negatives. One log colour scale for all layers and all schemes, so
+  the maps compare directly; grey boxes hold none. Each point counts at its nearest node;
+  boxes cut by the edge of the domain are scaled to a whole one. The first start counts them (a
+  few seconds) into `nn_dataset.density.npz`. Missing datasets are skipped; with none the button
+  is hidden.
 - **Probe:** click a point to see the rod shape, θ(s), curvature θ′(s), the forces, energy and
   moments, and profiles of the field along φ₁, φ₂ and d through that point.
 - **Compare:** Shift+click (or P) pins up to three points for comparison.
-- **Keys:** arrow keys move the probe one grid step; PgUp/PgDn change d.
-- **Export and share:** "Download θ(s) CSV" exports the rod. The URL keeps the view, so a link
+- **Keys:** arrow keys move the probe one grid step; PgUp/PgDn change d; 1–7 pick the field; V
+  switches 2D/3D, C contours; M, I, R switch tabs; ? lists them all.
+- **Export and share:** "CSV" in the inspector exports the rod. The URL keeps the view, so a link
   reopens the same point.
 - **Iso-surfaces in 3D:** level sets of U, f_x, f_y, M₁ or M₂ over (φ₁, φ₂, d), computed by the
   server on demand (marching tetrahedra over the jump-free cells, as in `postprocess.py`, so
@@ -214,13 +231,14 @@ first start writes a 2.4 GB `.theta.npy` cache next to the results.
 
 ### Run console
 
-At the bottom of the explorer (or the "Run console" link at the top). It edits every parameter of
+The "Run console" tab of the explorer. It edits every parameter of
 the programs and runs them:
 - **Solve:** `main.py`. The box, grid steps, beam, Newton tolerances, continuation settings and
   output names, then optionally `validate_results.py` and `postprocess.py`. φ ranges accept π
   notation (`−π/2`, `pi/4`). The form estimates the node count and run time.
-- **Refine:** `refine.py` on a finished solve. The scheme (points per cell, or iso-energy surfaces
-  with their target exponent, scale, level step, spacing floor and projections), the
+- **Refine:** `refine.py` on a finished solve. The scheme (points per cell; iso-energy surfaces
+  with their target exponent, scale, level step, spacing floor and projections; energy shells
+  with the same and their bin width and oversampling), the
   points-per-cell rule, workers, split, the stages to run, or "plan only" (branches, then
   `sample --dry-run`).
 - **Validate** and **Post-process** a finished solve.
@@ -373,18 +391,153 @@ so it needs no `branches` stage.
   levels, within 20 % of the lowest energy, are small caps on the d = 0.99 face and would need
   points closer than the 0.05-step floor, so they hold 2.6 k–21 k points instead of 22 k
   (`post/energy_histogram_iso.png`). On 0.25-wide bins no bin rises except two in the grid's
-  sparse tail above U = 50, by at most 18 rows. Explore it with
-  `python postprocessing/web/server.py --dataset data/production_iso/nn_dataset.npz`.
+  sparse tail above U = 50, by at most 18 rows. The explorer's density maps show it next to the
+  cells scheme (Data density → Scheme).
+
+### Third scheme: energy shells (`solver/refine_shell.py`)
+
+The iso scheme puts every new point on one of its levels, 5 % apart in U, so between two levels
+the dataset holds only grid states: on any energy scale finer than the level step its new points
+form a comb (all of them within 0.5 % of a level value). With `"scheme": "shell"` the levels are
+the edges of energy bins, and the points fill the shell between two edges.
+
+```bash
+python solver/refine.py data/production_shell/config.json sample --dry-run   # plan: shell_plan.npz, histogram
+python solver/refine.py data/production_shell/config.json sample             # solve; Ctrl-C and rerun resumes
+python solver/refine.py data/production_shell/config.json export
+python solver/refine.py data/production_shell/config.json check              # + post/energy_histogram_shell.png
+```
+
+- **Target and bins.** As the iso scheme: $H(U) = C\,U^{-\alpha}$ up to $U_p$, bin edges
+  $e_k = U_\text{min}(1 + \text{level\_step})^k$; bin k gets the target's rows in $[e_k, e_{k+1})$
+  less the grid rows there, divided by four.
+- **Shells.** Bin k's shell is where the linear interpolant of U over the jump-free tetrahedra with
+  the up branch at all corners lies in the bin, so it ends at the fold and at the box. Candidates:
+  the same number of uniform random points in every tetrahedron the bin crosses (the six
+  tetrahedra of a cell have equal volume), kept inside the shell, so they are uniform in it, about
+  `oversample` (12) per point wanted. A greedy Poisson-disk pass in 3D (grid-step units) keeps a
+  candidate unless a kept point lies within r; r is tuned per bin to within 3 % of the target, with
+  a floor of 0.05 grid steps. Only φ₁ + φ₂ ≥ 0.
+- **Solve.** The iso scheme's warm start, then projection along ∇U onto the point's planned energy
+  (the interpolant at the point) until $|U/U_\text{plan} - 1| < 10^{-4}$. The planned energies fill
+  each bin continuously, and so do the states. Projecting only the states that leave their bin,
+  and only until they are back in it, piles them up just inside the bin edges: U lies below its
+  linear interpolant, so the states planned near a bin's lower edge are the ones that leave it.
+- **Settings** (`"shell": {...}`): those of the iso scheme, `level_step` being the bin width, and
+  `oversample` (12). The plan is saved to `shell_plan.npz`.
+- **Production (`data/production_shell`, 2026-10-21).** 74 bins from U = 0.099 to 3.5, planned in
+  69 s; 1,357,967 solves in 29 min on 14 workers, none dropped; 99.64 % within 1e-4 of their
+  planned energy (the rest median 3e-4 off, at most 7 %), 99.95 % in their bin, 1.62 projections
+  on average. Dataset: 9.04 M states (5.4 M from the shells), 45.6 % with U < 1. All `check` tests
+  pass. On 0.24 % energy bins the new states form a continuum, 18 % of them within 0.5 % of an iso
+  level value; inside each 5 % bin they follow the shell's volume per unit U, so the top quarter of
+  a bin holds 29 % of its states and the second 22 % (narrower bins would flatten this). The
+  smallest shells, caps on the d = 0.99 face, hold more points than the iso surfaces there (5.4 k,
+  11.1 k and 17.5 k in the lowest three bins, against 2.6 k, 8.4 k and 14.5 k; target 22 k); from
+  the fourth bin on every bin meets its target. Nearest-neighbour distance: median 1.07 r, 99.9 %
+  below 1.66 r. Explore it with
+  `python postprocessing/web/server.py --dataset data/production_shell/nn_dataset.npz`, or with the
+  default datasets, which include it.
+
+## Neural-network surrogate (`surrogate/`)
+
+An MLP on the energy-shell dataset maps (d, φ₁, φ₂) and the branch b (+1 bent up, −1 bent down) to
+the energy U, the clamp moments M₁, M₂ and the probability that branch b exists there; the end
+forces are derivatives of its U, by automatic differentiation. It runs in its own environment, so
+PyTorch stays out of the FEniCSx one:
+
+```bash
+conda env create -f environment-ml.yml        # creates "elastica-ml"
+conda activate elastica-ml
+python surrogate/train_mlp.py data/production_shell/nn_dataset.npz                  # -> data/production_shell/mlp/
+python surrogate/train_mlp.py data/production_shell/nn_dataset.npz --w-force 0 \
+    --out data/production_shell/mlp_no_fx                                          # without the fx term
+python surrogate/plot_mlp.py data/production_shell/nn_dataset.npz data/production_shell/mlp \
+    data/production_shell/mlp_no_fx                                                # parity, error vs U
+```
+
+```python
+import sys; sys.path.insert(0, "surrogate")
+from train_mlp import load_model, predict
+model = load_model("data/production_shell/mlp/model.pt")      # device="cpu" also works
+out = predict(model, d, phi1, phi2, branch)       # scalars or arrays; branch +1 up, -1 down
+# out: exists_prob; energy, moment, moment_right (outputs); fx, fy, moment_ad, moment_right_ad
+# (autodiff). U and the rest mean something only where exists_prob > 0.5.
+```
+
+- **Forces.** The envelope theorem gives dU = −f_x dd − M₁ dφ₁ + M₂ dφ₂, so f_x = −∂U/∂d.
+  Turning the whole rod by α leaves U unchanged and moves the end by d α across the chord, so
+  M₂ − M₁ = f_y d and f_y = (∂U/∂φ₁ + ∂U/∂φ₂)/d. Central differences on the production grid match
+  −f_x, −M₁ and M₂ to 1e-4 relative, and the dataset satisfies f_y = (M₂ − M₁)/d to 0.07.
+- **Rows.** Every row of the dataset, with `branch` as an input: 11,385,368 rows, of which
+  9,044,630 are states (half per branch) and 2,340,738 are grid nodes past a fold where that
+  branch does not exist. Where both branches exist, b tells the two states apart. Nothing imposes
+  that bent down is the reflection of bent up, (U, M₁, M₂)(d, φ₁, φ₂, −1) = (U, −M₁, −M₂)(d, −φ₁,
+  −φ₂, +1); the network learns it, and `metrics.json` measures how well.
+- **Split.** The dataset's own, by symmetry orbit of cells within each energy band: train is its
+  "train" (9,118,478 rows, 80.1 %), test is its "validation" and "test" together (2,266,890 rows,
+  19.9 %). No row has an image on the other side, and the test set is used only for the report.
+- **Networks.** Two MLPs on the features (d, φ₁, φ₂, log(1 − d), b), each mapped onto [−1, 1],
+  each six hidden layers of 256 with SiLU (smooth, and so are its derivatives); 662 k parameters
+  in all. The field network's outputs are log U, asinh M₁ and asinh M₂, so the loss is relative
+  where U reaches 142 and |M| 168, and absolute near M = 0. The existence network gives a logit.
+  Two networks, so the sharp edge of existence at a fold costs the smooth fields nothing.
+- **Loss.** Over the states: squared errors of log U, asinh M₁, asinh M₂, of asinh(−∂U/∂φ₁) and
+  asinh(∂U/∂φ₂) against asinh M₁ and asinh M₂ (`--w-moment`, 1), and of asinh(−∂U/∂d / 10)
+  against asinh(f_x / 10) (`--w-force`, 1). Over every row: the cross-entropy of the existence
+  logit (`--w-exist`, 1). The field network is evaluated only on the states: on the other rows
+  its output is unconstrained, and a first attempt that masked their losses by zero went NaN
+  when exp(z_U) overflowed there. Adam, one-cycle learning rate up to 2e-3, batches of 8192,
+  200 epochs, full fp32.
+- **Results (2026-10-23).** Two runs, 86 min each, both at once on one RTX A6000. Test errors on
+  the 1,798,244 test states of both branches (median / p99 relative error; ‖e‖ / ‖y‖):
+
+  | | `mlp_no_fx` (f_x not in the loss) | `mlp` (f_x in the loss) |
+  |---|---|---|
+  | U | 2.1e-5 / 1.7e-4; 1.4e-4 | 1.2e-5 / 1.2e-4; 1.3e-4 |
+  | M₁, M₂ (outputs) | 3.5e-4 / 6.5e-3; 1.3e-3 | 3.6e-4 / 6.4e-3; 1.2e-3 |
+  | M₁, M₂ from ∂U/∂φ | 2.4e-4 / 3.9e-3; 1.2e-3 | 2.0e-4 / 3.7e-3; 1.0e-3 |
+  | f_x = −∂U/∂d | 3.1e-4 / 8.5e-3; **1.3e-2** | 1.3e-4 / 1.6e-3; 9.9e-4 |
+  | f_y = (∂U/∂φ₁ + ∂U/∂φ₂)/d | 3.3e-4 / 2.8e-2; 1.3e-3 | 2.7e-4 / 2.0e-2; 1.0e-3 |
+
+  For M₁, M₂ the larger of the two. Where the target crosses zero (moments, f_y) the relative
+  error has a floor of 1 % of its RMS. Bent up and bent down are equally accurate (within 10
+  %). Without the f_x term the autodiff f_x passes 1e-3 above U ≈ 20 and reaches 2 % at the
+  top, where the tension runs to 1.4e4 and U is steep in d; the error is the same on the
+  training states, so it is the fit, not overfitting. With the term f_x stays within 1e-4 to
+  1e-3 at every energy, and U improves too. `mlp` is the one to use; `mlp_no_fx` shows what
+  autodiff gives with no force data. The slopes of U give the moments more accurately than the
+  moment outputs. An earlier model of the bent-up branch alone (one network, 300 epochs, retired)
+  was 20–30 % more accurate on the same states.
+- **Absolute errors** (EI = L = 1, `mlp`). The median |error| grows with U about in step with the
+  values: in U from 3e-6 below U = 1 to 2.6e-4 above U = 10, in M₁ and f_y from 1.5e-4 to 5e-3, in
+  f_x from 1.4e-3 to 1.2e-2, a median 3.4–4.9 decades under the values. Above U = 30, where |f_x|
+  runs to 1.4e4, f_x is off by 1.8 (p99 17), and by 22 (p99 250) without the f_x term. At
+  d = 0.90 the errors are largest within 0.06 of the fold, 5–11 times those inside, and the
+  relative error there is 2–4 times higher for M₁ and f_x too.
+- **Existence.** 99.994 % of the test rows right: 0.004 % of the states predicted absent, 0.014 %
+  of the absent rows predicted to exist; 99.3 % right in fold cells (16,572 test rows). At
+  d = 0.90 the network's edges match the solver's on all but 2 (bent up) and 4 (bent down) of the
+  99,225 grid nodes. The edges are the folds, and the diagonal φ₁ = φ₂ outside the bistable
+  region, where the one state turns from bent up to bent down through p = 0.
+- **Symmetry.** At the test states of bent down, the learned bent down against the reflected
+  learned bent up: U agrees to 1.6e-5 (median; p99 1.6e-4), M₁ to 5.1e-4 (p99 1.3e-2), f_x to
+  1.8e-4, and the existence answers agree everywhere.
+- **Speed.** With forces, 0.46 s per million states on the A6000 and 7.6 µs per state on a CPU;
+  a solve takes about 18 ms. Outputs per run: `model.pt` (2.7 MB), `metrics.json` (per target,
+  branch and energy band, existence, symmetry) and `train.log`.
 
 ## Presentation
 
-`presentation/elastica_snap_surface.pptx` (46 slides; `elastica.pdf` is its LibreOffice export):
+`presentation/elastica_snap_surface.pptx` (66 slides; `elastica.pdf` is its LibreOffice export):
 the governing math, the snap surface and the buckling-mode criterion, the bistable region, the
 continuation strategy (deferral, stability test, exact cold start, mirror symmetry), the production
-results and the two refined-sampling schemes. Every data plot comes from `data/production`, or for
-the refinement sections `data/production_nn` and `data/production_iso`;
-`presentation/scripts/make_figures.py`, `make_bistable.py`, `make_refinement.py` and
-`make_refinement_iso.py` regenerate them in `presentation/figures/`. Equations are PowerPoint equations.
+results, the three refined-sampling schemes and the neural-network surrogate. Every data plot comes
+from `data/production`, or for the refinement sections `data/production_nn`, `data/production_iso`
+and `data/production_shell`; `presentation/scripts/make_figures.py`, `make_bistable.py`,
+`make_refinement.py`, `make_refinement_iso.py` and `make_refinement_shell.py` regenerate them in
+`presentation/figures/`, and `make_surrogate.py` (in `elastica-ml`) the surrogate's from the
+trained models in `data/production_shell`. Equations are PowerPoint equations.
 
 The refined-sampling section (slides 35–41) is written for readers new to the method. It gives
 the points-per-cell rule n(U_min) with the partial-cell minimum; how the points fill a cell (what
@@ -400,6 +553,20 @@ The iso-energy section (slides 42–46) covers `refine_iso.py`: the 1/U target h
 levels and how many points each gets; the level surfaces and their Poisson-disk points (one level
 in 3D, and the nearest-neighbour spacing over all levels); the solve and the projection onto the
 level along the envelope-theorem gradient; and the cell and iso datasets on the same bins.
+The energy-shell section (slides 47–50) shows the iso scheme's comb in energy against the shells'
+continuum, how a shell is filled and solved, and the three datasets on the same bins.
+The surrogate section (slides 51–66) is written for readers new to neural networks: each slide's
+title is a question and the line under it the answer. In order: why a surrogate (time per state,
+solver against network); what a neural network is (one unit, the smooth bend, fitting); what goes
+in and comes out (the branch as an input, the existence output); why the forces can come from the
+energy (envelope theorem, with tangents to the solver's U); the data and the held-back test cells;
+why ln U and why asinh M, each with plots and the equations behind them; the loss, term by term;
+whether the fit converges without memorising; the relative and the absolute error against energy;
+where the errors are largest (the folds); whether it knows where each shape exists; why the
+solver's force is in the fit (the run without it); and whether it is good enough, against the
+solver's own accuracy. `presentation/scripts/make_surrogate.py` draws its figures (`nn_*.png`, in
+`elastica-ml`), and `make_surrogate_equations.py` holds its equations as LaTeX and turns them into
+PowerPoint equations (through pandoc) with rendered fallbacks, as elsewhere.
 
 The bistable-region section (slides 14–21) compares the solve with a bent-down cold start. That
 second map is the solve under θ → −θ, the mirror image in φ₁ = φ₂ with the branches swapped, so it
